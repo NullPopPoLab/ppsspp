@@ -1239,7 +1239,7 @@ void retro_init(void)
    if (environ_cb(RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY, &dir_ptr) && dir_ptr)
       retro_save_dir = Path(dir_ptr);
 
-   retro_base_dir /= "PPSSPP";
+   retro_base_dir = Path("/usr/share/ppsspp/PPSSPP/");
 
    g_Config.currentDirectory = retro_base_dir;
    g_Config.defaultCurrentDirectory = retro_base_dir;
