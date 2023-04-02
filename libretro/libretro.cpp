@@ -430,11 +430,137 @@ class PrintfLogger : public LogListener
                break;
          }
       }
+      void Log(retro_log_level lev,const char* msg)
+      {
+           log_(lev, "%s", msg);
+      }
 
    private:
       retro_log_printf_t log_;
 };
 static PrintfLogger *printfLogger;
+
+/* multidisk support */
+static bool disk_ejected;
+static unsigned int disk_current_index;
+static unsigned int disk_count;
+static struct disks_state {
+   char *fname;
+} disks[8];
+static unsigned int disks_max=sizeof(disks) / sizeof(disks[0]);
+
+static bool disk_set_eject_state(bool ejected)
+{
+	if(ejected){
+//			cdd_unload();
+	}
+	else{
+//			enum cd_track_type cd_type;
+//			int ret;
+return false;
+
+//		   if (disks[disk_current_index].fname == NULL) {
+//		      if (log_cb)
+//		         log_cb(RETRO_LOG_ERROR, "missing disk #%u\n", disk_current_index);
+//		      return false;
+//		   }
+//
+//		   if (log_cb)
+//		      log_cb(RETRO_LOG_INFO, "switching to disk %u: \"%s\"\n", disk_current_index,
+//		            disks[disk_current_index].fname);
+//
+//		   ret = -1;
+//		   cd_type = PicoCdCheck(disks[disk_current_index].fname, NULL);
+//		   if (cd_type >= 0 && cd_type != CT_UNKNOWN)
+//		      ret = cdd_load(disks[disk_current_index].fname, cd_type);
+//		   if (ret != 0) {
+//		      if (log_cb)
+//		         log_cb(RETRO_LOG_ERROR, "Load failed, invalid CD image?\n");
+//		      return false;
+//		   }
+	}
+
+   disk_ejected = ejected;
+   return true;
+}
+
+static bool disk_get_eject_state(void)
+{
+   return disk_ejected;
+}
+
+static unsigned int disk_get_image_index(void)
+{
+   return disk_current_index;
+}
+
+static bool disk_set_image_index(unsigned int index)
+{
+   if (index >= disks_max)
+      return false;
+
+	disk_current_index=index;
+	return true;
+}
+
+static unsigned int disk_get_num_images(void)
+{
+   return disk_count;
+}
+
+static bool disk_replace_image_index(unsigned index,
+   const struct retro_game_info *info)
+{
+   bool ret = true;
+
+   if (index >= disks_max)
+      return false;
+
+   if (disks[index].fname != NULL)
+      free(disks[index].fname);
+   disks[index].fname = NULL;
+
+   if (info != NULL) {
+      disks[index].fname = strdup(info->path);
+      if (index == disk_current_index)
+         ret = disk_set_image_index(index);
+   }
+
+   return ret;
+}
+
+static bool disk_add_image_index(void)
+{
+   if (disk_count >= disks_max)
+      return false;
+
+   disk_count++;
+   return true;
+}
+
+static struct retro_disk_control_callback disk_control = {
+   disk_set_eject_state,
+   disk_get_eject_state,
+   disk_get_image_index,
+   disk_set_image_index,
+   disk_get_num_images,
+   disk_replace_image_index,
+   disk_add_image_index,
+};
+
+static void disk_tray_open(void)
+{
+   if (printfLogger)
+      printfLogger->Log(RETRO_LOG_INFO, "cd tray open\n");
+   disk_ejected = 1;
+}
+
+static void disk_tray_close(void)
+{
+   if (printfLogger)
+      printfLogger->Log(RETRO_LOG_INFO, "cd tray close\n");
+   disk_ejected = 0;
+}
 
 static bool set_variable_visibility(void)
 {
@@ -1223,6 +1349,8 @@ void retro_init(void)
       logman->SetAllLogLevels(LogTypes::LINFO);
    }
 
+   environ_cb(RETRO_ENVIRONMENT_SET_DISK_CONTROL_INTERFACE, &disk_control);
+
    g_Config.Load("", "");
    g_Config.iInternalResolution = 0;
 
@@ -1284,7 +1412,7 @@ void retro_get_system_info(struct retro_system_info *info)
    info->library_name     = "PPSSPP";
    info->library_version  = PPSSPP_GIT_VERSION;
    info->need_fullpath    = true;
-   info->valid_extensions = "elf|iso|cso|prx|pbp";
+   info->valid_extensions = "elf|iso|cso|prx|pbp|m3u";
 }
 
 void retro_get_system_av_info(struct retro_system_av_info *info)
@@ -1419,9 +1547,59 @@ bool retro_load_game(const struct retro_game_info *game)
    // default to interpreter to allow startup in platforms w/o JIT capability
    g_Config.iCpuCore         = (int)CPUCore::INTERPRETER;
 
+   disk_current_index = 0;
+	if(!strcmp(&game->path[strlen(game->path)-4],".m3u")){
+	  std::string text;
+	  if(File::ReadFileToString(true,Path(std::string(game->path)),text)){
+         int len;
+         char linebuf[512];
+         char pathbuf[512];
+         char dirbuf[512];
+         char *c;
+         const char *p=text.c_str();
+         strncpy(dirbuf,game->path,sizeof(dirbuf));
+         dirbuf[sizeof(dirbuf)-1]=0;
+         for(c=dirbuf;*c;++c);
+         for(;c>dirbuf;--c){
+			if(c[-1]!='/')continue;
+			*c=0;
+			break;
+         }
+
+         while (*p && (disk_count < disks_max))
+         {
+			for(c=linebuf;*p && c<&linebuf[sizeof(linebuf)-1];++p,++c){
+				*c=*p;
+				if(*c!='\0' && *c!='\r' && *c!='\n')continue;
+				for(;*p=='\r'||*p=='\n';++p);
+				break;
+			}
+			*c=0;
+
+            /* skip commented lines */
+            if (linebuf[0] != '#')
+            {
+               len = strlen(linebuf);
+               if (len > 0)
+               {
+                  /* append file path to disk image file name */
+                  snprintf(pathbuf, sizeof(pathbuf), "%s%s", dirbuf, linebuf);
+                  pathbuf[sizeof(pathbuf)-1]=0;
+                  disks[disk_count].fname = strdup(pathbuf);
+                  disk_count++;
+               }
+            }
+         }
+      }
+	}
+	else{
+		disk_count = 1;
+		disks[0].fname = strdup(game->path);
+	}
+
    CoreParameter coreParam   = {};
    coreParam.enableSound     = true;
-   coreParam.fileToStart     = Path(std::string(game->path));
+   coreParam.fileToStart     = Path(std::string(disks[0].fname));
    coreParam.mountIso.clear();
    coreParam.startBreak      = false;
    coreParam.printfEmuLog    = true;
