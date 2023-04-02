@@ -31,6 +31,7 @@
 #include "Core/HLE/sceCtrl.h"
 #include "Core/HLE/sceUtility.h"
 #include "Core/HLE/__sceAudio.h"
+#include "Core/HLE/sceUmd.h"
 #include "Core/HW/MemoryStick.h"
 #include "Core/Host.h"
 #include "Core/MemMap.h"
@@ -451,33 +452,25 @@ static unsigned int disks_max=sizeof(disks) / sizeof(disks[0]);
 
 static bool disk_set_eject_state(bool ejected)
 {
+	if(!getUMDReplacePermit())return false;
+
 	if(ejected){
-//			cdd_unload();
 	}
 	else{
-//			enum cd_track_type cd_type;
-//			int ret;
-return false;
+		if (disks[disk_current_index].fname == NULL) {
+		  if (printfLogger)
+		     printfLogger->Log(RETRO_LOG_ERROR, "missing UMD");
+		  return false;
+		}
 
-//		   if (disks[disk_current_index].fname == NULL) {
-//		      if (log_cb)
-//		         log_cb(RETRO_LOG_ERROR, "missing disk #%u\n", disk_current_index);
-//		      return false;
-//		   }
-//
-//		   if (log_cb)
-//		      log_cb(RETRO_LOG_INFO, "switching to disk %u: \"%s\"\n", disk_current_index,
-//		            disks[disk_current_index].fname);
-//
-//		   ret = -1;
-//		   cd_type = PicoCdCheck(disks[disk_current_index].fname, NULL);
-//		   if (cd_type >= 0 && cd_type != CT_UNKNOWN)
-//		      ret = cdd_load(disks[disk_current_index].fname, cd_type);
-//		   if (ret != 0) {
-//		      if (log_cb)
-//		         log_cb(RETRO_LOG_ERROR, "Load failed, invalid CD image?\n");
-//		      return false;
-//		   }
+		if (printfLogger)
+		  printfLogger->Log(RETRO_LOG_INFO, "replace UMD");
+
+		if(!__UmdReplace(Path(std::string(disks[disk_current_index].fname)))){
+		      if (printfLogger)
+		         printfLogger->Log(RETRO_LOG_ERROR, "Load failed, invalid UMD image?");
+		      return false;
+		}
 	}
 
    disk_ejected = ejected;
