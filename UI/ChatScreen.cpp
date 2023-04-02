@@ -138,7 +138,7 @@ void ChatMenu::UpdateChat() {
 			uint32_t textcolor = 0xFFFFFF;
 			uint32_t infocolor = 0xFDD835;
 
-			std::string name = g_Config.sNickName.c_str();
+			std::string name = g_Config.sNickName;
 			std::string displayname = i.substr(0, i.find(':'));
 			std::string chattext = i.substr(displayname.length());
 			
@@ -179,7 +179,7 @@ void ChatMenu::Update() {
 
 #if defined(USING_WIN_UI)
 	// Could remove the fullscreen check here, it works now.
-	if (promptInput_ && g_Config.bBypassOSKWithKeyboard && !g_Config.bFullScreen) {
+	if (promptInput_ && g_Config.bBypassOSKWithKeyboard && !g_Config.UseFullScreen()) {
 		System_InputBoxGetString(n->T("Chat"), n->T("Chat Here"), [](bool result, const std::string &value) {
 			if (result) {
 				sendChat(value);

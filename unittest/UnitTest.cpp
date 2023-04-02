@@ -40,6 +40,8 @@
 #include <jni.h>
 #endif
 
+#include "Common/Data/Collections/TinySet.h"
+#include "Common/Data/Convert/SmallDataConvert.h"
 #include "Common/Data/Text/Parsers.h"
 #include "Common/Data/Text/WrapText.h"
 #include "Common/Data/Encoding/Utf8.h"
@@ -308,6 +310,44 @@ bool TestParsers() {
 	return true;
 }
 
+bool TestTinySet() {
+	TinySet<int, 4> a;
+	EXPECT_EQ_INT((int)a.size(), 0);
+	a.push_back(1);
+	EXPECT_EQ_INT((int)a.size(), 1);
+	a.push_back(2);
+	EXPECT_EQ_INT((int)a.size(), 2);
+	TinySet<int, 4> b;
+	b.push_back(8);
+	b.push_back(9);
+	b.push_back(10);
+	EXPECT_EQ_INT((int)b.size(), 3);
+
+	a.append(b);
+	EXPECT_EQ_INT((int)a.size(), 5);
+	EXPECT_EQ_INT((int)b.size(), 3);
+
+	b.append(b);
+	EXPECT_EQ_INT((int)b.size(), 6);
+
+	EXPECT_EQ_INT(a[0], 1);
+	EXPECT_EQ_INT(a[1], 2);
+	EXPECT_EQ_INT(a[2], 8);
+	EXPECT_EQ_INT(a[3], 9);
+	EXPECT_EQ_INT(a[4], 10);
+	a.append(a);
+	EXPECT_EQ_INT(a.size(), 10);
+	EXPECT_EQ_INT(a[9], 10);
+
+	b.push_back(11);
+	EXPECT_EQ_INT((int)b.size(), 7);
+	b.push_back(12);
+	EXPECT_EQ_INT((int)b.size(), 8);
+	b.push_back(13);
+	EXPECT_EQ_INT(b.size(), 9);
+	return true;
+}
+
 bool TestVFPUSinCos() {
 	float sine, cosine;
 	InitVFPUSinCos();
@@ -474,29 +514,27 @@ private:
 };
 
 bool TestQuickTexHash() {
-	SetupTextureDecoder();
-
 	static const int BUF_SIZE = 1024;
 	AlignedMem buf(BUF_SIZE, 16);
 
 	memset(buf, 0, BUF_SIZE);
-	EXPECT_EQ_HEX(DoQuickTexHash(buf, BUF_SIZE), 0xaa756edc);
+	EXPECT_EQ_HEX(StableQuickTexHash(buf, BUF_SIZE), 0xaa756edc);
 
 	memset(buf, 1, BUF_SIZE);
-	EXPECT_EQ_HEX(DoQuickTexHash(buf, BUF_SIZE), 0x66f81b1c);
+	EXPECT_EQ_HEX(StableQuickTexHash(buf, BUF_SIZE), 0x66f81b1c);
 
 	strncpy(buf, "hello", BUF_SIZE);
-	EXPECT_EQ_HEX(DoQuickTexHash(buf, BUF_SIZE), 0xf6028131);
+	EXPECT_EQ_HEX(StableQuickTexHash(buf, BUF_SIZE), 0xf6028131);
 
 	strncpy(buf, "goodbye", BUF_SIZE);
-	EXPECT_EQ_HEX(DoQuickTexHash(buf, BUF_SIZE), 0xef81b54f);
+	EXPECT_EQ_HEX(StableQuickTexHash(buf, BUF_SIZE), 0xef81b54f);
 
 	// Simple patterns.
 	for (int i = 0; i < BUF_SIZE; ++i) {
 		char *p = buf;
 		p[i] = i & 0xFF;
 	}
-	EXPECT_EQ_HEX(DoQuickTexHash(buf, BUF_SIZE), 0x0d64531c);
+	EXPECT_EQ_HEX(StableQuickTexHash(buf, BUF_SIZE), 0x0d64531c);
 
 	int j = 573;
 	for (int i = 0; i < BUF_SIZE; ++i) {
@@ -504,7 +542,7 @@ bool TestQuickTexHash() {
 		j += ((i * 7) + (i & 3)) * 11;
 		p[i] = j & 0xFF;
 	}
-	EXPECT_EQ_HEX(DoQuickTexHash(buf, BUF_SIZE), 0x58de8dbc);
+	EXPECT_EQ_HEX(StableQuickTexHash(buf, BUF_SIZE), 0x58de8dbc);
 
 	return true;
 }
@@ -597,7 +635,7 @@ static bool TestPath() {
 	Path path3 = path2 / "foo/bar";
 	EXPECT_EQ_STR(path3.WithExtraExtension(".txt").ToString(), std::string("/asdf/jkl/foo/bar.txt"));
 
-	EXPECT_EQ_STR(Path("foo.bar/hello").GetFileExtension(), std::string(""));
+	EXPECT_EQ_STR(Path("foo.bar/hello").GetFileExtension(), std::string());
 	EXPECT_EQ_STR(Path("foo.bar/hello.txt").WithReplacedExtension(".txt", ".html").ToString(), std::string("foo.bar/hello.html"));
 
 	EXPECT_EQ_STR(Path("C:\\Yo").NavigateUp().ToString(), std::string("C:"));
@@ -745,6 +783,15 @@ static bool TestWrapText() {
 	return true;
 }
 
+static bool TestSmallDataConvert() {
+	float f[4] = { 1.0f / 255.0f, 2.0f / 255.0f, 3.0f / 255.0f, 4.0f / 255.f };
+	uint32_t result = Float4ToUint8x4_NoClamp(f);
+	EXPECT_EQ_HEX(result, 0x04030201);
+	result = Float4ToUint8x4(f);
+	EXPECT_EQ_HEX(result, 0x04030201);
+	return true;
+}
+
 typedef bool (*TestFunc)();
 struct TestItem {
 	const char *name;
@@ -756,8 +803,10 @@ struct TestItem {
 bool TestArmEmitter();
 bool TestArm64Emitter();
 bool TestX64Emitter();
+bool TestRiscVEmitter();
 bool TestShaderGenerators();
 bool TestSoftwareGPUJit();
+bool TestIRPassSimplify();
 bool TestThreadManager();
 
 TestItem availableTests[] = {
@@ -770,12 +819,16 @@ TestItem availableTests[] = {
 #if PPSSPP_ARCH(AMD64) || PPSSPP_ARCH(X86)
 	TEST_ITEM(X64Emitter),
 #endif
+#if PPSSPP_ARCH(AMD64) || PPSSPP_ARCH(X86) || PPSSPP_ARCH(RISCV64)
+	TEST_ITEM(RiscVEmitter),
+#endif
 	TEST_ITEM(VertexJit),
 	TEST_ITEM(Asin),
 	TEST_ITEM(SinCos),
 	TEST_ITEM(VFPUSinCos),
 	TEST_ITEM(MathUtil),
 	TEST_ITEM(Parsers),
+	TEST_ITEM(IRPassSimplify),
 	TEST_ITEM(Jit),
 	TEST_ITEM(MatrixTranspose),
 	TEST_ITEM(ParseLBN),
@@ -788,6 +841,8 @@ TestItem availableTests[] = {
 	TEST_ITEM(AndroidContentURI),
 	TEST_ITEM(ThreadManager),
 	TEST_ITEM(WrapText),
+	TEST_ITEM(TinySet),
+	TEST_ITEM(SmallDataConvert),
 };
 
 int main(int argc, const char *argv[]) {

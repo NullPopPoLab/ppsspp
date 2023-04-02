@@ -50,6 +50,9 @@
 #ifdef _WIN32
 #include "Common/CommonWindows.h"
 #include <sys/stat.h>
+#if PPSSPP_PLATFORM(UWP)
+#include <fileapifromapp.h>
+#endif
 #undef FILE_OPEN
 #else
 #include <dirent.h>
@@ -112,6 +115,11 @@ Path DirectoryFileSystem::GetLocalPath(std::string internalPath) const {
 bool DirectoryFileHandle::Open(const Path &basePath, std::string &fileName, FileAccess access, u32 &error) {
 	error = 0;
 
+	if (access == FILEACCESS_NONE) {
+		error = SCE_KERNEL_ERROR_ERRNO_INVALID_ARGUMENT;
+		return false;
+	}
+
 #if HOST_IS_CASE_SENSITIVE
 	if (access & (FILEACCESS_APPEND | FILEACCESS_CREATE | FILEACCESS_WRITE)) {
 		DEBUG_LOG(FILESYS, "Checking case for path %s", fileName.c_str());
@@ -158,7 +166,7 @@ bool DirectoryFileHandle::Open(const Path &basePath, std::string &fileName, File
 
 	// Let's do it!
 #if PPSSPP_PLATFORM(UWP)
-	hFile = CreateFile2(fullName.ToWString().c_str(), desired, sharemode, openmode, nullptr);
+	hFile = CreateFile2FromAppW(fullName.ToWString().c_str(), desired, sharemode, openmode, nullptr);
 #else
 	hFile = CreateFile(fullName.ToWString().c_str(), desired, sharemode, 0, openmode, 0, 0);
 #endif
@@ -170,7 +178,7 @@ bool DirectoryFileHandle::Open(const Path &basePath, std::string &fileName, File
 			// Sometimes, the file is locked for write, let's try again.
 			sharemode |= FILE_SHARE_WRITE;
 #if PPSSPP_PLATFORM(UWP)
-			hFile = CreateFile2(fullName.ToWString().c_str(), desired, sharemode, openmode, nullptr);
+			hFile = CreateFile2FromAppW(fullName.ToWString().c_str(), desired, sharemode, openmode, nullptr);
 #else
 			hFile = CreateFile(fullName.ToWString().c_str(), desired, sharemode, 0, openmode, 0, 0);
 #endif
@@ -668,40 +676,34 @@ PSPFileInfo DirectoryFileSystem::GetFileInfo(std::string filename) {
 	PSPFileInfo x;
 	x.name = filename;
 
+	File::FileInfo info;
 	Path fullName = GetLocalPath(filename);
-	if (!File::Exists(fullName)) {
+	if (!File::GetFileInfo(fullName, &info)) {
 #if HOST_IS_CASE_SENSITIVE
 		if (! FixPathCase(basePath, filename, FPC_FILE_MUST_EXIST))
 			return ReplayApplyDiskFileInfo(x, CoreTiming::GetGlobalTimeUs());
 		fullName = GetLocalPath(filename);
 
-		if (! File::Exists(fullName))
+		if (!File::GetFileInfo(fullName, &info))
 			return ReplayApplyDiskFileInfo(x, CoreTiming::GetGlobalTimeUs());
 #else
 		return ReplayApplyDiskFileInfo(x, CoreTiming::GetGlobalTimeUs());
 #endif
 	}
 
-	// TODO: Consolidate to just a File::GetFileInfo call.
-
-	x.type = File::IsDirectory(fullName) ? FILETYPE_DIRECTORY : FILETYPE_NORMAL;
+	x.type = info.isDirectory ? FILETYPE_DIRECTORY : FILETYPE_NORMAL;
 	x.exists = true;
 
 	if (x.type != FILETYPE_DIRECTORY) {
-		File::FileInfo info;
-		if (!File::GetFileInfo(fullName, &info)) {
-			ERROR_LOG(FILESYS, "DirectoryFileSystem::GetFileInfo: GetFileInfo failed: %s", fullName.c_str());
-		} else {
-			x.size = info.size;
-			x.access = info.access;
-			time_t atime = info.atime;
-			time_t ctime = info.ctime;
-			time_t mtime = info.mtime;
+		x.size = info.size;
+		x.access = info.access;
+		time_t atime = info.atime;
+		time_t ctime = info.ctime;
+		time_t mtime = info.mtime;
 
-			localtime_r((time_t*)&atime, &x.atime);
-			localtime_r((time_t*)&ctime, &x.ctime);
-			localtime_r((time_t*)&mtime, &x.mtime);
-		}
+		localtime_r((time_t*)&atime, &x.atime);
+		localtime_r((time_t*)&ctime, &x.ctime);
+		localtime_r((time_t*)&mtime, &x.mtime);
 	}
 
 	return ReplayApplyDiskFileInfo(x, CoreTiming::GetGlobalTimeUs());
@@ -710,7 +712,7 @@ PSPFileInfo DirectoryFileSystem::GetFileInfo(std::string filename) {
 #ifdef _WIN32
 #define FILETIME_FROM_UNIX_EPOCH_US 11644473600000000ULL
 
-static void tmFromFiletime(tm &dest, FILETIME &src) {
+static void tmFromFiletime(tm &dest, const FILETIME &src) {
 	u64 from_1601_us = (((u64) src.dwHighDateTime << 32ULL) + (u64) src.dwLowDateTime) / 10ULL;
 	u64 from_1970_us = from_1601_us - FILETIME_FROM_UNIX_EPOCH_US;
 
@@ -792,25 +794,28 @@ bool DirectoryFileSystem::ComputeRecursiveDirSizeIfFast(const std::string &path,
 	}
 }
 
-std::vector<PSPFileInfo> DirectoryFileSystem::GetDirListing(std::string path) {
+std::vector<PSPFileInfo> DirectoryFileSystem::GetDirListing(const std::string &path, bool *exists) {
 	std::vector<PSPFileInfo> myVector;
 
 	std::vector<File::FileInfo> files;
 	Path localPath = GetLocalPath(path);
 	const int flags = File::GETFILES_GETHIDDEN | File::GETFILES_GET_NAVIGATION_ENTRIES;
-	if (!File::GetFilesInDir(localPath, &files, nullptr, flags)) {
-		// TODO: Case sensitivity should be checked on a file system basis, right?
+	bool success = File::GetFilesInDir(localPath, &files, nullptr, flags);
 #if HOST_IS_CASE_SENSITIVE
-		if (FixPathCase(basePath, path, FPC_FILE_MUST_EXIST)) {
+	if (!success) {
+		// TODO: Case sensitivity should be checked on a file system basis, right?
+		std::string fixedPath = path;
+		if (FixPathCase(basePath, fixedPath, FPC_FILE_MUST_EXIST)) {
 			// May have failed due to case sensitivity, try again
-			localPath = GetLocalPath(path);
-			if (!File::GetFilesInDir(localPath, &files, nullptr, 0)) {
-				return ReplayApplyDiskListing(myVector, CoreTiming::GetGlobalTimeUs());
-			}
+			localPath = GetLocalPath(fixedPath);
+			success = File::GetFilesInDir(localPath, &files, nullptr, flags);
 		}
-#else
-		return ReplayApplyDiskListing(myVector, CoreTiming::GetGlobalTimeUs());
+	}
 #endif
+	if (!success) {
+		if (exists)
+			*exists = false;
+		return ReplayApplyDiskListing(myVector, CoreTiming::GetGlobalTimeUs());
 	}
 
 	bool hideISOFiles = PSP_CoreParameter().compat.flags().HideISOFiles;
@@ -838,6 +843,7 @@ std::vector<PSPFileInfo> DirectoryFileSystem::GetDirListing(std::string path) {
 			entry.type = FILETYPE_NORMAL;
 		}
 		entry.access = file.access;
+		entry.exists = file.exists;
 
 		localtime_r((time_t*)&file.atime, &entry.atime);
 		localtime_r((time_t*)&file.ctime, &entry.ctime);
@@ -846,6 +852,8 @@ std::vector<PSPFileInfo> DirectoryFileSystem::GetDirListing(std::string path) {
 		myVector.push_back(entry);
 	}
 
+	if (exists)
+		*exists = true;
 	return ReplayApplyDiskListing(myVector, CoreTiming::GetGlobalTimeUs());
 }
 
@@ -1076,9 +1084,11 @@ size_t VFSFileSystem::SeekFile(u32 handle, s32 position, FileMove type) {
 	}
 }
 
-std::vector<PSPFileInfo> VFSFileSystem::GetDirListing(std::string path) {
+std::vector<PSPFileInfo> VFSFileSystem::GetDirListing(const std::string &path, bool *exists) {
 	std::vector<PSPFileInfo> myVector;
 	// TODO
+	if (exists)
+		*exists = false;
 	return myVector;
 }
 

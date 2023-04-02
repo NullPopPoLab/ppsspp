@@ -1,11 +1,11 @@
 # vim:noexpandtab:
-cmake_minimum_required(VERSION 3.6)
+cmake_minimum_required(VERSION 3.8)
 project(PPSSPP)
 enable_testing()
 
 #This is supposed to work but doesn't!
 if(NOT ANDROID)
-	set(CMAKE_CXX_STANDARD 11)
+	set(CMAKE_CXX_STANDARD 17)
 	set(CMAKE_CXX_STANDARD_REQUIRED ON)
 endif()
 
@@ -83,7 +83,7 @@ if(NOT ANDROID AND NOT IOS)
 	endif()
 endif()
 
-if(${CMAKE_SYSTEM_NAME} MATCHES "Linux")
+if(${CMAKE_SYSTEM_NAME} MATCHES "Linux" AND NOT USE_LIBNX)
 	set(LINUX ON)
 	add_definitions(-D__STDC_CONSTANT_MACROS)
 endif()
@@ -116,6 +116,21 @@ include(GNUInstallDirs)
 
 add_definitions(-DASSETS_DIR="${CMAKE_INSTALL_FULL_DATADIR}/ppsspp/assets/")
 
+if(OPENXR)
+	add_definitions(-DOPENXR)
+	add_library(openxr SHARED IMPORTED)
+	if(OPENXR_PLATFORM_PICO)
+	  add_definitions(-DOPENXR_PLATFORM_PICO)
+	  set_property(TARGET openxr PROPERTY IMPORTED_LOCATION "${CMAKE_SOURCE_DIR}/ext/openxr/libs/pico/arm64-v8a/libopenxr_loader.so")
+	  message("OpenXR for Pico enabled")
+	endif()
+	if(OPENXR_PLATFORM_QUEST)
+	  add_definitions(-DOPENXR_PLATFORM_QUEST)
+	  set_property(TARGET openxr PROPERTY IMPORTED_LOCATION "${CMAKE_SOURCE_DIR}/ext/openxr/libs/quest/arm64-v8a/libopenxr_loader.so")
+	  message("OpenXR for Quest enabled")
+	endif()
+endif()
+
 if(GOLD)
 	add_definitions(-DGOLD)
 	message("Gold Build")
@@ -146,9 +161,11 @@ option(UNITTEST "Set to ON to generate the unittest target" ${UNITTEST})
 option(SIMULATOR "Set to ON when targeting an x86 simulator of an ARM platform" ${SIMULATOR})
 option(LIBRETRO "Set to ON to generate the libretro target" OFF)
 # :: Options
+option(USE_LIBNX "Set to ON to build for Switch(libnx)" OFF)
 option(USE_FFMPEG "Build with FFMPEG support" ON)
 option(USE_DISCORD "Build with Discord support" ON)
 option(USE_MINIUPNPC "Build with miniUPnPc support" ON)
+option(USE_ARMIPS "Build with armips support in API/debugger" ON)
 option(USE_SYSTEM_SNAPPY "Dynamically link against system snappy" ${USE_SYSTEM_SNAPPY})
 option(USE_SYSTEM_FFMPEG "Dynamically link against system FFMPEG" ${USE_SYSTEM_FFMPEG})
 option(USE_SYSTEM_LIBZIP "Dynamically link against system libzip" ${USE_SYSTEM_LIBZIP})
@@ -212,7 +229,9 @@ include_directories(ext/glslang)
 # Anyway, glew will be going away anyway.
 include_directories(ext/glew)
 
-if(NOT OPENGL_LIBRARIES AND USING_GLES2)
+if(OPENXR)
+	set(OPENGL_LIBRARIES GLESv3 EGL)
+elseif(NOT OPENGL_LIBRARIES AND USING_GLES2)
 	set(OPENGL_LIBRARIES GLESv2 EGL)
 endif()
 
@@ -304,7 +323,7 @@ if(NOT MSVC)
 	add_definitions(-DPNG_ARM_NEON_OPT=0)
 
 	if(ANDROID)
-		set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=gnu++11")
+		set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=gnu++17")
 	endif()
 	if(CLANG)
 		add_definitions(-Wno-nullability-completeness)
@@ -341,6 +360,9 @@ if(NOT MSVC)
 	set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O2 -D_NDEBUG")
 	set(CMAKE_C_FLAGS_RELWITHDEBINFO "${CMAKE_C_FLAGS_RELWITHDEBINFO} -O2 -g -D_NDEBUG")
 
+	# Enable checking printf-like format strings (also works for logging functions)
+	add_definitions(-Wformat)
+
 	# Disable some warnings
 	add_definitions(-Wno-multichar)
 
@@ -356,8 +378,9 @@ if(NOT MSVC)
 	endif()
 
 	if(IOS)
+		set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0")
 	elseif(APPLE AND NOT CMAKE_CROSSCOMPILING)
-		set(CMAKE_OSX_DEPLOYMENT_TARGET "10.8")
+		set(CMAKE_OSX_DEPLOYMENT_TARGET "10.13")
 		set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -stdlib=libc++ -U__STRICT_ANSI__")
 		set(CMAKE_XCODE_ATTRIBUTE_CLANG_CXX_LIBRARY "libc++")
 	elseif(NOT ANDROID)
@@ -414,6 +437,15 @@ if(WIN32)
 endif()
 
 
+set(CommonJIT
+	Core/MIPS/JitCommon/JitCommon.cpp
+	Core/MIPS/JitCommon/JitCommon.h
+	Core/MIPS/JitCommon/JitBlockCache.cpp
+	Core/MIPS/JitCommon/JitBlockCache.h
+	Core/MIPS/JitCommon/JitState.cpp
+	Core/MIPS/JitCommon/JitState.h
+)
+
 set(CommonX86
 	Common/ABI.cpp
 	Common/ABI.h
@@ -432,7 +464,6 @@ set(CommonARM
 	Common/ArmCPUDetect.cpp
 	Common/ArmEmitter.h
 	Common/ArmEmitter.cpp
-	Common/Data/Convert/ColorConvNEON.cpp
 )
 source_group(ARM FILES ${CommonARM})
 
@@ -453,7 +484,10 @@ set(CommonMIPS
 source_group(MIPS FILES ${CommonMIPS})
 
 set(CommonRISCV64
+	${CommonJIT}
 	Common/RiscVCPUDetect.cpp
+	Common/RiscVEmitter.cpp
+	Common/RiscVEmitter.h
 	Core/MIPS/fake/FakeJit.cpp
 	Core/MIPS/fake/FakeJit.h
 )
@@ -473,6 +507,24 @@ if(WIN32)
 	)
 endif()
 
+set(CommonVR
+	Common/VR/OpenXRLoader.cpp
+	Common/VR/OpenXRLoader.h
+	Common/VR/PPSSPPVR.cpp
+	Common/VR/PPSSPPVR.h
+	Common/VR/VRBase.cpp
+	Common/VR/VRBase.h
+	Common/VR/VRFramebuffer.cpp
+	Common/VR/VRFramebuffer.h
+	Common/VR/VRInput.cpp
+	Common/VR/VRInput.h
+	Common/VR/VRMath.cpp
+	Common/VR/VRMath.h
+	Common/VR/VRRenderer.cpp
+	Common/VR/VRRenderer.h
+)
+include_directories(ext/openxr)
+
 add_library(Common STATIC
 	${CommonX86}
 	${CommonARM}
@@ -480,6 +532,7 @@ add_library(Common STATIC
 	${CommonMIPS}
 	${CommonRISCV64}
 	${CommonD3D}
+	${CommonVR}
 	Common/Serialize/Serializer.cpp
 	Common/Serialize/Serializer.h
 	Common/Serialize/SerializeDeque.h
@@ -554,6 +607,7 @@ add_library(Common STATIC
 	Common/File/FileDescriptor.cpp
 	Common/File/FileDescriptor.h
 	Common/GPU/DataFormat.h
+	Common/GPU/MiscTypes.h
 	Common/GPU/thin3d.cpp
 	Common/GPU/thin3d.h
 	Common/GPU/thin3d_create.h
@@ -579,10 +633,14 @@ add_library(Common STATIC
 	Common/GPU/OpenGL/GLQueueRunner.h
 	Common/GPU/OpenGL/DataFormatGL.cpp
 	Common/GPU/OpenGL/DataFormatGL.h
+	Common/GPU/Vulkan/VulkanBarrier.cpp
+	Common/GPU/Vulkan/VulkanBarrier.h
 	Common/GPU/Vulkan/VulkanDebug.cpp
 	Common/GPU/Vulkan/VulkanDebug.h
 	Common/GPU/Vulkan/VulkanContext.cpp
 	Common/GPU/Vulkan/VulkanContext.h
+	Common/GPU/Vulkan/VulkanFramebuffer.cpp
+	Common/GPU/Vulkan/VulkanFramebuffer.h
 	Common/GPU/Vulkan/VulkanImage.cpp
 	Common/GPU/Vulkan/VulkanImage.h
 	Common/GPU/Vulkan/VulkanLoader.cpp
@@ -596,15 +654,14 @@ add_library(Common STATIC
 	Common/GPU/Vulkan/VulkanRenderManager.h
 	Common/GPU/Vulkan/VulkanQueueRunner.cpp
 	Common/GPU/Vulkan/VulkanQueueRunner.h
+	Common/GPU/Vulkan/VulkanFrameData.cpp
+	Common/GPU/Vulkan/VulkanFrameData.h
 	Common/Input/GestureDetector.cpp
 	Common/Input/GestureDetector.h
 	Common/Input/KeyCodes.h
 	Common/Input/InputState.cpp
 	Common/Input/InputState.h
-	Common/Math/fast/fast_math.c
 	Common/Math/fast/fast_matrix.c
-	Common/Math/fast/fast_matrix_neon.S
-	Common/Math/fast/fast_matrix_sse.c
 	Common/Math/curves.cpp
 	Common/Math/curves.h
 	Common/Math/expression_parser.cpp
@@ -615,6 +672,8 @@ add_library(Common STATIC
 	Common/Math/lin/vec3.h
 	Common/Math/math_util.cpp
 	Common/Math/math_util.h
+	Common/Math/Statistics.h
+	Common/Math/Statistics.cpp
 	Common/Net/HTTPClient.cpp
 	Common/Net/HTTPClient.h
 	Common/Net/HTTPHeaders.cpp
@@ -637,6 +696,8 @@ add_library(Common STATIC
 	Common/Render/TextureAtlas.h
 	Common/Render/DrawBuffer.cpp
 	Common/Render/DrawBuffer.h
+	Common/Render/ManagedTexture.cpp
+	Common/Render/ManagedTexture.h
 	Common/Render/Text/draw_text.cpp
 	Common/Render/Text/draw_text.h
 	Common/Render/Text/draw_text_android.cpp
@@ -655,6 +716,8 @@ add_library(Common STATIC
 	Common/Thread/ThreadUtil.h
 	Common/Thread/ThreadManager.cpp
 	Common/Thread/ThreadManager.h
+	Common/UI/AsyncImageFileView.cpp
+	Common/UI/AsyncImageFileView.h
 	Common/UI/Root.cpp
 	Common/UI/Root.h
 	Common/UI/Screen.cpp
@@ -822,7 +885,7 @@ add_library(cityhash STATIC
 	ext/cityhash/city.h
 	ext/cityhash/citycrc.h
 )
-include_directories(ext/cityhash)
+target_include_directories(cityhash PRIVATE ext/cityhash)
 
 if(NOT MSVC)
 	# These can be fast even for debug.
@@ -1054,6 +1117,9 @@ if(ANDROID)
 		android/jni/OpenSLContext.cpp
 		android/jni/OpenSLContext.h
 	)
+	if (OPENXR)
+		set(nativeExtraLibs ${nativeExtraLibs} openxr)
+	endif()
 	# No target
 elseif(IOS)
 	set(nativeExtra ${nativeExtra}
@@ -1147,8 +1213,12 @@ elseif(TARGET SDL2::SDL2)
 		SDL/SDLJoystick.cpp
 		SDL/SDLMain.cpp
 		SDL/SDLGLGraphicsContext.cpp
-		SDL/SDLVulkanGraphicsContext.cpp
 	)
+	if(NOT USE_LIBNX)
+		set(nativeExtra ${nativeExtra}
+			SDL/SDLVulkanGraphicsContext.cpp
+		)
+	endif()
 	set(nativeExtraLibs ${nativeExtraLibs} SDL2::SDL2)
 	if(APPLE)
 		set(nativeExtra ${nativeExtra} SDL/SDLMain.h SDL/SDLMain.mm SDL/SDLCocoaMetalLayer.h SDL/SDLCocoaMetalLayer.mm)
@@ -1181,8 +1251,6 @@ list(APPEND NativeAppSource
 	UI/ChatScreen.cpp
 	UI/DevScreens.cpp
 	UI/DevScreens.h
-	UI/DisplayLayoutEditor.cpp
-	UI/DisplayLayoutEditor.h
 	UI/DisplayLayoutScreen.cpp
 	UI/DisplayLayoutScreen.h
 	UI/EmuScreen.h
@@ -1231,8 +1299,6 @@ list(APPEND NativeAppSource
 	UI/MemStickScreen.cpp
 	UI/ProfilerDraw.h
 	UI/ProfilerDraw.cpp
-	UI/TextureUtil.h
-	UI/TextureUtil.cpp
 	UI/ComboKeyMappingScreen.h
 	UI/ComboKeyMappingScreen.cpp
 	UI/Theme.h
@@ -1251,6 +1317,10 @@ if(ANDROID)
 	endif()
 endif()
 
+if (IOS)
+        set(nativeExtra ${nativeExtra} ${NativeAppSource})
+endif()
+
 add_library(native STATIC
 	${nativeExtra}
 	Common/Render/Text/draw_text_qt.cpp
@@ -1266,7 +1336,7 @@ if(LINUX AND NOT ANDROID)
 endif()
 
 set(ATOMIC_LIB)
-if(ANDROID)
+if(ANDROID OR (LINUX AND ARM_DEVICE))
 	set(ATOMIC_LIB atomic)
 endif()
 
@@ -1295,7 +1365,7 @@ add_library(kirk STATIC
 	ext/libkirk/kirk_engine.c
 	ext/libkirk/kirk_engine.h
 )
-include_directories(ext/libkirk)
+target_include_directories(kirk PRIVATE ext/libkirk)
 
 add_library(sfmt19937 STATIC
 	ext/sfmt19937/SFMT.c
@@ -1304,19 +1374,20 @@ add_library(sfmt19937 STATIC
 	ext/sfmt19937/SFMT-params.h
 	ext/sfmt19937/SFMT-params19937.h
 )
-include_directories(ext/sfmt19937)
+target_compile_definitions(sfmt19937 PRIVATE SFMT_MEXP=19937)
+target_include_directories(sfmt19937 PRIVATE ext/sfmt19937)
 
 add_library(xbrz STATIC
 	ext/xbrz/xbrz.cpp
 	ext/xbrz/xbrz.h
 )
-include_directories(ext/xbrz)
+target_include_directories(xbrz PRIVATE ext/xbrz)
 
 add_library(xxhash STATIC
 	ext/xxhash.c
 	ext/xxhash.h
 )
-include_directories(ext/xxhash)
+target_include_directories(xxhash PRIVATE ext/xxhash)
 
 set(CoreExtra)
 set(CoreExtraLibs)
@@ -1414,8 +1485,6 @@ if(NOT MOBILE_DEVICE)
 endif()
 
 set(GPU_GLES
-	GPU/GLES/DepalettizeShaderGLES.cpp
-	GPU/GLES/DepalettizeShaderGLES.h
 	GPU/GLES/DepthBufferGLES.cpp
 	GPU/GLES/GPU_GLES.cpp
 	GPU/GLES/GPU_GLES.h
@@ -1427,18 +1496,13 @@ set(GPU_GLES
 	GPU/GLES/ShaderManagerGLES.h
 	GPU/GLES/StateMappingGLES.cpp
 	GPU/GLES/StateMappingGLES.h
-	GPU/GLES/StencilBufferGLES.cpp
 	GPU/GLES/TextureCacheGLES.cpp
 	GPU/GLES/TextureCacheGLES.h
-	GPU/GLES/TextureScalerGLES.cpp
-	GPU/GLES/TextureScalerGLES.h
 	GPU/GLES/DrawEngineGLES.cpp
 	GPU/GLES/DrawEngineGLES.h
 )
 
 set(GPU_VULKAN
-	GPU/Vulkan/DepalettizeShaderVulkan.cpp
-	GPU/Vulkan/DepalettizeShaderVulkan.h
 	GPU/Vulkan/DebugVisVulkan.cpp
 	GPU/Vulkan/DebugVisVulkan.h
 	GPU/Vulkan/DrawEngineVulkan.cpp
@@ -1453,18 +1517,13 @@ set(GPU_VULKAN
 	GPU/Vulkan/ShaderManagerVulkan.h
 	GPU/Vulkan/StateMappingVulkan.cpp
 	GPU/Vulkan/StateMappingVulkan.h
-	GPU/Vulkan/StencilBufferVulkan.cpp
 	GPU/Vulkan/TextureCacheVulkan.cpp
 	GPU/Vulkan/TextureCacheVulkan.h
-	GPU/Vulkan/TextureScalerVulkan.cpp
-	GPU/Vulkan/TextureScalerVulkan.h
 	GPU/Vulkan/VulkanUtil.cpp
 	GPU/Vulkan/VulkanUtil.h
 )
 
 set(GPU_D3D9
-	GPU/Directx9/DepalettizeShaderDX9.cpp
-	GPU/Directx9/DepalettizeShaderDX9.h
 	GPU/Directx9/DrawEngineDX9.cpp
 	GPU/Directx9/DrawEngineDX9.h
 	GPU/Directx9/FramebufferManagerDX9.cpp
@@ -1475,16 +1534,11 @@ set(GPU_D3D9
 	GPU/Directx9/ShaderManagerDX9.h
 	GPU/Directx9/StateMappingDX9.cpp
 	GPU/Directx9/StateMappingDX9.h
-	GPU/Directx9/StencilBufferDX9.cpp
 	GPU/Directx9/TextureCacheDX9.cpp
 	GPU/Directx9/TextureCacheDX9.h
-	GPU/Directx9/TextureScalerDX9.cpp
-	GPU/Directx9/TextureScalerDX9.h
 )
 
 set(GPU_D3D11
-	GPU/D3D11/DepalettizeShaderD3D11.cpp
-	GPU/D3D11/DepalettizeShaderD3D11.h
 	GPU/D3D11/DrawEngineD3D11.cpp
 	GPU/D3D11/DrawEngineD3D11.h
 	GPU/D3D11/FramebufferManagerD3D11.cpp
@@ -1497,11 +1551,8 @@ set(GPU_D3D11
 	GPU/D3D11/ShaderManagerD3D11.h
 	GPU/D3D11/StateMappingD3D11.cpp
 	GPU/D3D11/StateMappingD3D11.h
-	GPU/D3D11/StencilBufferD3D11.cpp
 	GPU/D3D11/TextureCacheD3D11.cpp
 	GPU/D3D11/TextureCacheD3D11.h
-	GPU/D3D11/TextureScalerD3D11.cpp
-	GPU/D3D11/TextureScalerD3D11.h
 )
 
 # We build Vulkan even on Apple to avoid annoying build differences.
@@ -1510,18 +1561,21 @@ if(WIN32)
 	list(APPEND GPU_IMPLS ${GPU_D3D9} ${GPU_D3D11})
 endif()
 
-if(ARMV7 OR ARM64)
-	set(GPU_NEON GPU/Common/TextureDecoderNEON.cpp)
-endif()
 set(GPU_SOURCES
 	${GPU_IMPLS}
 	${GPU_NEON}
+	GPU/Common/Draw2D.cpp
+	GPU/Common/Draw2D.h
+	GPU/Common/TextureShaderCommon.cpp
+	GPU/Common/TextureShaderCommon.h
 	GPU/Common/DepalettizeShaderCommon.cpp
 	GPU/Common/DepalettizeShaderCommon.h
 	GPU/Common/FragmentShaderGenerator.cpp
 	GPU/Common/FragmentShaderGenerator.h
 	GPU/Common/VertexShaderGenerator.cpp
 	GPU/Common/VertexShaderGenerator.h
+	GPU/Common/GeometryShaderGenerator.cpp
+	GPU/Common/GeometryShaderGenerator.h
 	GPU/Common/FramebufferManagerCommon.cpp
 	GPU/Common/FramebufferManagerCommon.h
 	GPU/Common/GPUDebugInterface.cpp
@@ -1565,6 +1619,8 @@ set(GPU_SOURCES
 	GPU/Debugger/Breakpoints.h
 	GPU/Debugger/Debugger.cpp
 	GPU/Debugger/Debugger.h
+	GPU/Debugger/GECommandTable.cpp
+	GPU/Debugger/GECommandTable.h
 	GPU/Debugger/Playback.cpp
 	GPU/Debugger/Playback.h
 	GPU/Debugger/Record.cpp
@@ -1614,6 +1670,7 @@ set(GPU_SOURCES
 # SHARED on ANDROID, STATIC everywhere else
 add_library(${CoreLibName} ${CoreLinkType}
 	${CoreExtra}
+	${CommonJIT}
 	Core/Config.cpp
 	Core/Config.h
 	Core/ConfigValues.h
@@ -1694,6 +1751,8 @@ add_library(${CoreLibName} ${CoreLinkType}
 	Core/Dialog/PSPMsgDialog.h
 	Core/Dialog/PSPNetconfDialog.cpp
 	Core/Dialog/PSPNetconfDialog.h
+	Core/Dialog/PSPNpSigninDialog.cpp
+	Core/Dialog/PSPNpSigninDialog.h
 	Core/Dialog/PSPOskDialog.cpp
 	Core/Dialog/PSPOskDialog.h
 	Core/Dialog/PSPPlaceholderDialog.cpp
@@ -1877,6 +1936,8 @@ add_library(${CoreLibName} ${CoreLinkType}
 	Core/HLE/scePspNpDrm_user.h
 	Core/HLE/sceNp.cpp
 	Core/HLE/sceNp.h
+	Core/HLE/sceNp2.cpp
+	Core/HLE/sceNp2.h
 	Core/HLE/scePauth.cpp
 	Core/HLE/scePauth.h
 	Core/HW/SimpleAudioDec.cpp
@@ -1917,12 +1978,6 @@ add_library(${CoreLibName} ${CoreLinkType}
 	Core/FileLoaders/RamCachingFileLoader.h
 	Core/FileLoaders/RetryingFileLoader.cpp
 	Core/FileLoaders/RetryingFileLoader.h
-	Core/MIPS/JitCommon/JitCommon.cpp
-	Core/MIPS/JitCommon/JitCommon.h
-	Core/MIPS/JitCommon/JitBlockCache.cpp
-	Core/MIPS/JitCommon/JitBlockCache.h
-	Core/MIPS/JitCommon/JitState.cpp
-	Core/MIPS/JitCommon/JitState.h
 	Core/MIPS/MIPS.cpp
 	Core/MIPS/MIPS.h
 	Core/MIPS/MIPSAnalyst.cpp
@@ -1971,8 +2026,6 @@ add_library(${CoreLibName} ${CoreLinkType}
 	Core/ThreadPools.h
 	Core/Util/AudioFormat.cpp
 	Core/Util/AudioFormat.h
-	Core/Util/AudioFormatNEON.cpp
-	Core/Util/AudioFormatNEON.h
 	Core/Util/GameManager.cpp
 	Core/Util/GameManager.h
 	Core/Util/PortManager.cpp
@@ -1981,7 +2034,6 @@ add_library(${CoreLibName} ${CoreLinkType}
 	Core/Util/BlockAllocator.h
 	Core/Util/PPGeDraw.cpp
 	Core/Util/PPGeDraw.h
-	${CORE_NEON}
 	${GPU_SOURCES}
 	ext/disarm.cpp
 	${CMAKE_CURRENT_BINARY_DIR}/git-version.cpp
@@ -1994,7 +2046,11 @@ if(ANDROID)
 	endif()
 endif()
 
-set(CoreExtraLibs ${CoreExtraLibs} armips)
+if(USE_ARMIPS)
+	set(CoreExtraLibs ${CoreExtraLibs} armips)
+else()
+	add_definitions(-DNO_ARMIPS=1)
+endif()
 
 # needed for VK_USE_PLATFORM_XCB_KHR only
 #if(VULKAN AND NOT WIN32)
@@ -2021,6 +2077,7 @@ if(USE_SYSTEM_ZSTD)
 	target_link_libraries(${CoreLibName} ${ZSTD_LIBRARY})
 else()
 	set(ZSTD_BUILD_PROGRAMS OFF CACHE BOOL "we don't need zstd programs" FORCE)
+	set(ZSTD_LEGACY_SUPPORT OFF CACHE BOOL "we don't use any old zstd files" FORCE)
 	add_subdirectory(ext/zstd/build/cmake EXCLUDE_FROM_ALL)
 	set(CoreExtraLibs ${CoreExtraLibs} libzstd_static)
 	include_directories(ext/zstd/lib)
@@ -2028,6 +2085,8 @@ endif()
 
 target_link_libraries(${CoreLibName} Common native kirk cityhash sfmt19937 xbrz xxhash ${GlslangLibs}
 	${CoreExtraLibs} ${OPENGL_LIBRARIES} ${X11_LIBRARIES} ${CMAKE_DL_LIBS})
+
+target_compile_features(${CoreLibName} PUBLIC cxx_std_17)
 
 if(FFmpeg_FOUND)
 	target_compile_definitions(${CoreLibName} PRIVATE USE_FFMPEG=1)
@@ -2321,8 +2380,10 @@ if(UNITTEST)
 		unittest/TestShaderGenerators.cpp
 		unittest/TestArmEmitter.cpp
 		unittest/TestArm64Emitter.cpp
+		unittest/TestIRPassSimplify.cpp
 		unittest/TestX64Emitter.cpp
 		unittest/TestVertexJit.cpp
+		unittest/TestRiscVEmitter.cpp
 		unittest/TestSoftwareGPUJit.cpp
 		unittest/TestThreadManager.cpp
 		unittest/JitHarness.cpp
@@ -2415,7 +2476,7 @@ if(NOT ANDROID)
 endif()
 # packaging and code signing
 if(IOS)
-	set(DEPLOYMENT_TARGET 8.0)
+	set(DEPLOYMENT_TARGET 11.0)
 	file(GLOB IOSAssets ios/assets/*.png)
 	list(REMOVE_ITEM IOSAssets ${CMAKE_CURRENT_SOURCE_DIR}/ios/assets/Default-568h@2x.png)
 	list(REMOVE_ITEM IOSAssets ${CMAKE_CURRENT_SOURCE_DIR}/ios/assets/Default-568h@3x.png)
@@ -2469,6 +2530,8 @@ if(UNIX AND NOT ANDROID AND NOT APPLE)
 		DIRECTORY "${CMAKE_BINARY_DIR}/assets"
 		DESTINATION "${CMAKE_INSTALL_DATADIR}/ppsspp"
 		PATTERN ".git*" EXCLUDE
+		PATTERN "mime" EXCLUDE
+		PATTERN "lang/README.md" EXCLUDE
 	)
 	install(
 		FILES "${CMAKE_BINARY_DIR}/ppsspp.desktop"
@@ -2481,7 +2544,11 @@ if(UNIX AND NOT ANDROID AND NOT APPLE)
 	)
 	install(
 		FILES "${CMAKE_SOURCE_DIR}/icons/icon-512.svg"
-		DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/pixmaps"
-		RENAME ppsspp.svg
+		DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/scalable/apps"
+		RENAME "ppsspp.svg"
+	)
+	install(
+		FILES "${CMAKE_SOURCE_DIR}/assets/mime/ppsspp.xml"
+		DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/mime/packages"
 	)
 endif()

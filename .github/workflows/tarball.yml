@@ -5,6 +5,9 @@ on:
   release:
     types:
       - created
+  push:
+    tags:
+      - "v*.*"
 
 jobs:
   build:
@@ -12,14 +15,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
 
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v3
       with:
         submodules: recursive
 
     - name: archive
       id: archive
       run: |
-        VERSION=$(printf "%s\n" ${{ github.event.release.tag_name }} | sed 's/^v//')
+        VERSION=${GITHUB_REF##*/}
+        test -z "$VERSION" && VERSION=${{ github.event.release.tag_name }}
+        VERSION=$(printf "%s\n" "$VERSION" | sed 's/^v//')
         PKGNAME="ppsspp-$VERSION"
         mkdir -p /tmp/$PKGNAME
         mv * /tmp/$PKGNAME
@@ -35,14 +40,10 @@ jobs:
         sed -i "s;unknown;${VERSION};" $PKGNAME/git-version.cmake || true
         TARBALL=$PKGNAME.tar.xz
         tar cJf $TARBALL $PKGNAME
-        echo "::set-output name=tarball::$TARBALL"
+        echo "tarball=$TARBALL" >> $GITHUB_OUTPUT
 
     - name: upload tarball
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      uses: softprops/action-gh-release@v1
       with:
-        upload_url: ${{ github.event.release.upload_url }}
-        asset_path: ./${{ steps.archive.outputs.tarball }}
-        asset_name: ${{ steps.archive.outputs.tarball }}
-        asset_content_type: application/x-xz
+        files: ${{ steps.archive.outputs.tarball }}
+        token: ${{ secrets.GITHUB_TOKEN }}

@@ -57,22 +57,10 @@ inline static T VecClamp(const T &v, const T &low, const T &high)
 }
 
 template<typename T>
-class Vec2
-{
+class Vec2 {
 public:
-	union
-	{
-		struct
-		{
-			T x,y;
-		};
-#if defined(_M_SSE)
-		__m128i ivec;
-		__m128 vec;
-#elif PPSSPP_ARCH(ARM64)
-		int32x4_t ivec;
-		float32x4_t vec;
-#endif
+	struct {
+		T x,y;
 	};
 
 	T* AsArray() { return &x; }
@@ -81,15 +69,6 @@ public:
 	Vec2() {}
 	Vec2(const T a[2]) : x(a[0]), y(a[1]) {}
 	Vec2(const T& _x, const T& _y) : x(_x), y(_y) {}
-#if defined(_M_SSE)
-	Vec2(const __m128 &_vec) : vec(_vec) {}
-	Vec2(const __m128i &_ivec) : ivec(_ivec) {}
-#elif PPSSPP_ARCH(ARM64)
-	Vec2(const float32x4_t &_vec) : vec(_vec) {}
-#if !defined(_MSC_VER)
-	Vec2(const int32x4_t &_ivec) : ivec(_ivec) {}
-#endif
-#endif
 
 	template<typename T2>
 	Vec2<T2> Cast() const
@@ -166,7 +145,7 @@ public:
 	float Length() const;
 	void SetLength(const float l);
 	Vec2 WithLength(const float l) const;
-	float Distance2To(Vec2 &other);
+	float Distance2To(const Vec2 &other) const;
 	Vec2 Normalized() const;
 	float Normalize(); // returns the previous length, which is often useful
 
@@ -217,7 +196,7 @@ public:
 #if defined(_M_SSE)
 		__m128i ivec;
 		__m128 vec;
-#elif PPSSPP_ARCH(ARM64)
+#elif PPSSPP_ARCH(ARM64_NEON)
 		int32x4_t ivec;
 		float32x4_t vec;
 #endif
@@ -228,15 +207,15 @@ public:
 
 	Vec3() {}
 	Vec3(const T a[3]) : x(a[0]), y(a[1]), z(a[2]) {}
-	Vec3(const T& _x, const T& _y, const T& _z) : x(_x), y(_y), z(_z) {}
+	constexpr Vec3(const T& _x, const T& _y, const T& _z) : x(_x), y(_y), z(_z) {}
 	Vec3(const Vec2<T>& _xy, const T& _z) : x(_xy.x), y(_xy.y), z(_z) {}
 #if defined(_M_SSE)
-	Vec3(const __m128 &_vec) : vec(_vec) {}
-	Vec3(const __m128i &_ivec) : ivec(_ivec) {}
+	constexpr Vec3(const __m128 &_vec) : vec(_vec) {}
+	constexpr Vec3(const __m128i &_ivec) : ivec(_ivec) {}
 	Vec3(const Vec3Packed<T> &_xyz) {
 		vec = _mm_loadu_ps(_xyz.AsArray());
 	}
-#elif PPSSPP_ARCH(ARM64)
+#elif PPSSPP_ARCH(ARM64_NEON)
 	Vec3(const float32x4_t &_vec) : vec(_vec) {}
 #if !defined(_MSC_VER)
 	Vec3(const int32x4_t &_ivec) : ivec(_ivec) {}
@@ -249,7 +228,7 @@ public:
 #endif
 
 	template<typename T2>
-	Vec3<T2> Cast() const
+	constexpr Vec3<T2> Cast() const
 	{
 		return Vec3<T2>((T2)x, (T2)y, (T2)z);
 	}
@@ -258,7 +237,7 @@ public:
 	static Vec3 FromRGB(unsigned int rgb);
 	unsigned int ToRGB() const; // alpha bits set to zero
 
-	static Vec3 AssignToAll(const T& f)
+	static constexpr Vec3 AssignToAll(const T& f)
 	{
 		return Vec3<T>(f, f, f);
 	}
@@ -331,7 +310,7 @@ public:
 	float Length() const;
 	void SetLength(const float l);
 	Vec3 WithLength(const float l) const;
-	float Distance2To(Vec3 &other);
+	float Distance2To(const Vec3 &other) const;
 	Vec3 Normalized(bool useSSE4 = false) const;
 	Vec3 NormalizedOr001(bool useSSE4 = false) const;
 	float Normalize(); // returns the previous length, which is often useful
@@ -499,7 +478,7 @@ public:
 	float Length() const;
 	void SetLength(const float l);
 	Vec3Packed WithLength(const float l) const;
-	float Distance2To(Vec3Packed &other);
+	float Distance2To(const Vec3Packed &other) const;
 	Vec3Packed Normalized() const;
 	float Normalize(); // returns the previous length, which is often useful
 
@@ -576,7 +555,7 @@ public:
 #if defined(_M_SSE)
 		__m128i ivec;
 		__m128 vec;
-#elif PPSSPP_ARCH(ARM64)
+#elif PPSSPP_ARCH(ARM64_NEON)
 		int32x4_t ivec;
 		float32x4_t vec;
 #endif
@@ -593,7 +572,7 @@ public:
 #if defined(_M_SSE)
 	Vec4(const __m128 &_vec) : vec(_vec) {}
 	Vec4(const __m128i &_ivec) : ivec(_ivec) {}
-#elif PPSSPP_ARCH(ARM64)
+#elif PPSSPP_ARCH(ARM64_NEON)
 	Vec4(const float32x4_t &_vec) : vec(_vec) {}
 #if !defined(_MSC_VER)
 	Vec4(const int32x4_t &_ivec) : ivec(_ivec) {}
@@ -695,7 +674,7 @@ public:
 	float Length() const;
 	void SetLength(const float l);
 	Vec4 WithLength(const float l) const;
-	float Distance2To(Vec4 &other);
+	float Distance2To(const Vec4 &other) const;
 	Vec4 Normalized() const;
 	float Normalize(); // returns the previous length, which is often useful
 
@@ -918,8 +897,9 @@ inline void Vec3ByMatrix43(float vecOut[3], const float v[3], const float m[12])
 	vecOut[0] = _mm_cvtss_f32(sum);
 	vecOut[1] = vectorGetByIndex<1>(sum);
 	vecOut[2] = vectorGetByIndex<2>(sum);
-#elif PPSSPP_ARCH(ARM_NEON) && PPSSPP_ARCH(ARM64)
-	float32x4_t sum = Vec3ByMatrix43Internal(vld1q_f32(v), m);
+#elif PPSSPP_ARCH(ARM64_NEON)
+	float vecIn[4] = {v[0], v[1], v[2], 1.0f};
+	float32x4_t sum = Vec3ByMatrix43Internal(vld1q_f32(vecIn), m);
 	vecOut[0] = vgetq_lane_f32(sum, 0);
 	vecOut[1] = vgetq_lane_f32(sum, 1);
 	vecOut[2] = vgetq_lane_f32(sum, 2);
@@ -936,7 +916,7 @@ inline Vec3f MATH3D_CALL Vec3ByMatrix43(const Vec3f v, const float m[12]) {
 	__m128 y = _mm_shuffle_ps(v.vec, v.vec, _MM_SHUFFLE(1, 1, 1, 1));
 	__m128 z = _mm_shuffle_ps(v.vec, v.vec, _MM_SHUFFLE(2, 2, 2, 2));
 	return Vec3ByMatrix43Internal(x, y, z, m);
-#elif PPSSPP_ARCH(ARM_NEON) && PPSSPP_ARCH(ARM64)
+#elif PPSSPP_ARCH(ARM64_NEON)
 	return Vec3ByMatrix43Internal(v.vec, m);
 #else
 	Vec3f vecOut;
@@ -957,7 +937,7 @@ inline __m128 MATH3D_CALL Vec3ByMatrix44Internal(__m128 x, __m128 y, __m128 z, c
 		_mm_add_ps(_mm_mul_ps(col2, z), col3));
 	return sum;
 }
-#elif PPSSPP_ARCH(ARM_NEON) && PPSSPP_ARCH(ARM64)
+#elif PPSSPP_ARCH(ARM64_NEON)
 inline float32x4_t Vec3ByMatrix44Internal(float32x4_t vec, const float m[16]) {
 	float32x4_t col0 = vld1q_f32(m);
 	float32x4_t col1 = vld1q_f32(m + 4);
@@ -977,8 +957,9 @@ inline void Vec3ByMatrix44(float vecOut[4], const float v[3], const float m[16])
 	__m128 z = _mm_set1_ps(v[2]);
 	__m128 sum = Vec3ByMatrix44Internal(x, y, z, m);
 	_mm_storeu_ps(vecOut, sum);
-#elif PPSSPP_ARCH(ARM_NEON) && PPSSPP_ARCH(ARM64)
-	float32x4_t sum = Vec3ByMatrix44Internal(vld1q_f32(v), m);
+#elif PPSSPP_ARCH(ARM64_NEON)
+	float vecIn[4] = {v[0], v[1], v[2], 1.0f};
+	float32x4_t sum = Vec3ByMatrix44Internal(vld1q_f32(vecIn), m);
 	vst1q_f32(vecOut, sum);
 #else
 	vecOut[0] = v[0] * m[0] + v[1] * m[4] + v[2] * m[8] + m[12];
@@ -994,7 +975,7 @@ inline Vec4f MATH3D_CALL Vec3ByMatrix44(const Vec3f v, const float m[16]) {
 	__m128 y = _mm_shuffle_ps(v.vec, v.vec, _MM_SHUFFLE(1, 1, 1, 1));
 	__m128 z = _mm_shuffle_ps(v.vec, v.vec, _MM_SHUFFLE(2, 2, 2, 2));
 	return Vec3ByMatrix44Internal(x, y, z, m);
-#elif PPSSPP_ARCH(ARM_NEON) && PPSSPP_ARCH(ARM64)
+#elif PPSSPP_ARCH(ARM64_NEON)
 	return Vec3ByMatrix44Internal(v.vec, m);
 #else
 	Vec4f vecOut;
@@ -1014,7 +995,7 @@ inline __m128 MATH3D_CALL Norm3ByMatrix43Internal(__m128 x, __m128 y, __m128 z, 
 		_mm_mul_ps(col2, z));
 	return sum;
 }
-#elif PPSSPP_ARCH(ARM_NEON) && PPSSPP_ARCH(ARM64)
+#elif PPSSPP_ARCH(ARM64_NEON)
 inline float32x4_t Norm3ByMatrix43Internal(float32x4_t vec, const float m[16]) {
 	float32x4_t col0 = vld1q_f32(m);
 	float32x4_t col1 = vld1q_f32(m + 3);
@@ -1035,7 +1016,7 @@ inline void Norm3ByMatrix43(float vecOut[3], const float v[3], const float m[12]
 	vecOut[0] = _mm_cvtss_f32(sum);
 	vecOut[1] = vectorGetByIndex<1>(sum);
 	vecOut[2] = vectorGetByIndex<2>(sum);
-#elif PPSSPP_ARCH(ARM_NEON) && PPSSPP_ARCH(ARM64)
+#elif PPSSPP_ARCH(ARM64_NEON)
 	float32x4_t sum = Norm3ByMatrix43Internal(vld1q_f32(v), m);
 	vecOut[0] = vgetq_lane_f32(sum, 0);
 	vecOut[1] = vgetq_lane_f32(sum, 1);
@@ -1053,7 +1034,7 @@ inline Vec3f MATH3D_CALL Norm3ByMatrix43(const Vec3f v, const float m[12]) {
 	__m128 y = _mm_shuffle_ps(v.vec, v.vec, _MM_SHUFFLE(1, 1, 1, 1));
 	__m128 z = _mm_shuffle_ps(v.vec, v.vec, _MM_SHUFFLE(2, 2, 2, 2));
 	return Norm3ByMatrix43Internal(x, y, z, m);
-#elif PPSSPP_ARCH(ARM_NEON) && PPSSPP_ARCH(ARM64)
+#elif PPSSPP_ARCH(ARM64_NEON)
 	return Norm3ByMatrix43Internal(v.vec, m);
 #else
 	Vec3f vecOut;

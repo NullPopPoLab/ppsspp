@@ -3,6 +3,7 @@
 #include "Common/GPU/OpenGL/GLFeatures.h"
 #include "Common/GPU/thin3d.h"
 #include "Common/Thread/ThreadUtil.h"
+#include "Common/VR/PPSSPPVR.h"
 
 #include "Common/Log.h"
 #include "Common/MemoryUtil.h"
@@ -21,14 +22,15 @@ static bool OnRenderThread() {
 }
 #endif
 
-GLRTexture::GLRTexture(int width, int height, int numMips) {
-	if (gl_extensions.OES_texture_npot) {
+GLRTexture::GLRTexture(const Draw::DeviceCaps &caps, int width, int height, int depth, int numMips) {
+	if (caps.textureNPOTFullySupported) {
 		canWrap = true;
 	} else {
 		canWrap = isPowerOf2(width) && isPowerOf2(height);
 	}
 	w = width;
 	h = height;
+	d = depth;
 	this->numMips = numMips;
 }
 
@@ -107,12 +109,6 @@ void GLDeleter::Perform(GLRenderManager *renderManager, bool skipGLCalls) {
 		delete framebuffer;
 	}
 	framebuffers.clear();
-}
-
-GLRenderManager::GLRenderManager() {
-	for (int i = 0; i < MAX_INFLIGHT_FRAMES; i++) {
-
-	}
 }
 
 GLRenderManager::~GLRenderManager() {
@@ -237,9 +233,13 @@ bool GLRenderManager::ThreadFrame() {
 			INFO_LOG(G3D, "Running first frame (%d)", threadFrame_);
 			firstFrame = false;
 		}
+
+		// Render the scene.
 		Run(threadFrame_);
+
 		VLOG("PULL: Finished frame %d", threadFrame_);
 	} while (!nextFrame);
+
 	return true;
 }
 
@@ -300,6 +300,7 @@ void GLRenderManager::BindFramebufferAsRenderTarget(GLRFramebuffer *fb, GLRRende
 #ifdef _DEBUG
 	curProgram_ = nullptr;
 #endif
+
 	// Eliminate dupes.
 	if (steps_.size() && steps_.back()->render.framebuffer == fb && steps_.back()->stepType == GLRStepType::RENDER) {
 		if (color != GLRRenderPassAction::CLEAR && depth != GLRRenderPassAction::CLEAR && stencil != GLRRenderPassAction::CLEAR) {
@@ -353,9 +354,13 @@ void GLRenderManager::BindFramebufferAsRenderTarget(GLRFramebuffer *fb, GLRRende
 			step->dependencies.insert(fb);
 		}
 	}
+
+	if (invalidationCallback_) {
+		invalidationCallback_(InvalidationCallbackFlags::RENDER_PASS_STATE);
+	}
 }
 
-void GLRenderManager::BindFramebufferAsTexture(GLRFramebuffer *fb, int binding, int aspectBit, int attachment) {
+void GLRenderManager::BindFramebufferAsTexture(GLRFramebuffer *fb, int binding, int aspectBit) {
 	_dbg_assert_(curRenderStep_ && curRenderStep_->stepType == GLRStepType::RENDER);
 	_dbg_assert_(binding < MAX_GL_TEXTURE_SLOTS);
 	GLRRenderData data{ GLRRenderCommand::BIND_FB_TEXTURE };
@@ -479,7 +484,6 @@ void GLRenderManager::BeginFrame() {
 	// In GL, we have to do deletes on the submission thread.
 
 	insideFrame_ = true;
-	renderStepOffset_ = 0;
 }
 
 void GLRenderManager::Finish() {
@@ -576,7 +580,16 @@ void GLRenderManager::Run(int frame) {
 		}
 	}
 
-	queueRunner_.RunSteps(stepsOnThread, skipGLCalls_);
+	if (IsVREnabled()) {
+		int passes = GetVRPassesCount();
+		for (int i = 0; i < passes; i++) {
+			PreVRFrameRender(i);
+			queueRunner_.RunSteps(stepsOnThread, skipGLCalls_, i < passes - 1, true);
+			PostVRFrameRender();
+		}
+	} else {
+		queueRunner_.RunSteps(stepsOnThread, skipGLCalls_, false, false);
+	}
 	stepsOnThread.clear();
 
 	if (!skipGLCalls_) {
@@ -602,9 +615,6 @@ void GLRenderManager::Run(int frame) {
 }
 
 void GLRenderManager::FlushSync() {
-	// TODO: Reset curRenderStep_?
-	renderStepOffset_ += (int)steps_.size();
-
 	int curFrame = curFrame_;
 	FrameData &frameData = frameData_[curFrame];
 	{

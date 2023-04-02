@@ -170,14 +170,17 @@ bool isPTPPortInUse(uint16_t port, bool forListen, SceNetEtherAddr* dstmac, uint
 }
 
 // Replacement for inet_ntoa since it's getting deprecated
-std::string ip2str(in_addr in) {
+std::string ip2str(in_addr in, bool maskPublicIP) {
 	char str[INET_ADDRSTRLEN] = "...";
 	u8* ipptr = (u8*)&in;
-	snprintf(str, sizeof(str), "%u.%u.%u.%u", ipptr[0], ipptr[1], ipptr[2], ipptr[3]);
+	if (maskPublicIP && !isPrivateIP(in.s_addr))
+		snprintf(str, sizeof(str), "%u.%u.xx.%u", ipptr[0], ipptr[1], ipptr[3]);
+	else
+		snprintf(str, sizeof(str), "%u.%u.%u.%u", ipptr[0], ipptr[1], ipptr[2], ipptr[3]);
 	return std::string(str);
 }
 
-std::string mac2str(SceNetEtherAddr* mac) {
+std::string mac2str(const SceNetEtherAddr *mac) {
 	char str[18] = ":::::";
 
 	if (mac != NULL) {
@@ -298,8 +301,18 @@ int IsSocketReady(int fd, bool readfd, bool writefd, int* errorcode, int timeout
 	timeval tval;
 
 	// Avoid getting Fatal signal 6 (SIGABRT) on linux/android
-	if (fd < 0)
-	    return SOCKET_ERROR;
+	if (fd < 0) {
+		if (errorcode != nullptr)
+			*errorcode = EBADF;
+		return SOCKET_ERROR;
+	}
+#if !defined(_WIN32)
+	if (fd >= FD_SETSIZE) {
+		if (errorcode != nullptr)
+			*errorcode = EBADF;
+		return SOCKET_ERROR;
+	}
+#endif
 
 	FD_ZERO(&readfds);
 	writefds = readfds;
@@ -312,9 +325,10 @@ int IsSocketReady(int fd, bool readfd, bool writefd, int* errorcode, int timeout
 	tval.tv_sec = timeoutUS / 1000000;
 	tval.tv_usec = timeoutUS % 1000000;
 
+	// Note: select will flags an unconnected TCP socket (ie. a freshly created socket without connecting first, or when connect failed with ECONNREFUSED on linux) as writeable/readable, thus can't be used to tell whether the connection has established or not.
 	int ret = select(fd + 1, readfd? &readfds: nullptr, writefd? &writefds: nullptr, nullptr, &tval);
 	if (errorcode != nullptr)
-		*errorcode = errno;
+		*errorcode = (ret < 0? errno: 0);
 
 	return ret;
 }
@@ -1249,7 +1263,7 @@ void notifyMatchingHandler(SceNetAdhocMatchingContext * context, ThreadMessage *
 	MatchingArgs argsNew = { 0 };
 	u32_le dataBufLen = msg->optlen + 8; //max(bufLen, msg->optlen + 8);
 	u32_le dataBufAddr = userMemory.Alloc(dataBufLen); // We will free this memory after returning from mipscall. FIXME: Are these buffers supposed to be taken/pre-allocated from the memory pool during sceNetAdhocMatchingInit?
-	uint8_t * dataPtr = Memory::GetPointer(dataBufAddr);
+	uint8_t * dataPtr = Memory::GetPointerWrite(dataBufAddr);
 	if (dataPtr) {
 		memcpy(dataPtr, &msg->mac, sizeof(msg->mac));
 		if (msg->optlen > 0)
@@ -1311,10 +1325,10 @@ void sendChat(std::string chatString) {
 			if (IsSocketReady((int)metasocket, false, true) > 0) {
 				int chatResult = send((int)metasocket, (const char*)&chat, sizeof(chat), MSG_NOSIGNAL);
 				NOTICE_LOG(SCENET, "Send Chat %s to Adhoc Server", chat.message);
-				std::string name = g_Config.sNickName.c_str();
+				std::string name = g_Config.sNickName;
 
 				std::lock_guard<std::mutex> guard(chatLogLock);
-				chatLog.push_back(name.substr(0, 8) + ": " + chat.message);
+				chatLog.emplace_back(name.substr(0, 8) + ": " + chat.message);
 				chatMessageGeneration++;
 			}
 		}
@@ -1877,6 +1891,7 @@ uint32_t getLocalIp(int sock) {
 static std::vector<std::pair<uint32_t, uint32_t>> InitPrivateIPRanges() {
 	struct sockaddr_in saNet {}, saMask{};
 	std::vector<std::pair<uint32_t, uint32_t>> ip_ranges;
+	ip_ranges.reserve(5);
 
 	if (1 == inet_pton(AF_INET, "192.168.0.0", &(saNet.sin_addr)) && 1 == inet_pton(AF_INET, "255.255.0.0", &(saMask.sin_addr)))
 		ip_ranges.push_back({saNet.sin_addr.s_addr, saMask.sin_addr.s_addr});
@@ -1914,7 +1929,7 @@ void getLocalMac(SceNetEtherAddr * addr){
 		mac[0] &= 0xfc;
 	}
 	else
-	if (!ParseMacAddress(g_Config.sMACAddress.c_str(), mac)) {
+	if (!ParseMacAddress(g_Config.sMACAddress, mac)) {
 		ERROR_LOG(SCENET, "Error parsing mac address %s", g_Config.sMACAddress.c_str());
 		memset(&mac, 0, sizeof(mac));
 	}
@@ -2027,6 +2042,7 @@ int setSockNoSIGPIPE(int sock, int flag) {
 	// Set SIGPIPE when supported (ie. BSD/MacOS X)
 	int opt = flag;
 #if defined(SO_NOSIGPIPE)
+	// Note: Linux might have SO_NOSIGPIPE defined too, but using it on setsockopt will result to EINVAL error
 	return setsockopt(sock, SOL_SOCKET, SO_NOSIGPIPE, (void*)&opt, sizeof(opt));
 #endif
 	return -1;
@@ -2159,6 +2175,8 @@ int initNetwork(SceNetAdhocctlAdhocId *adhoc_id){
 	setSockNoDelay((int)metasocket, 1);
 	// Switch to Nonblocking Behaviour
 	changeBlockingMode((int)metasocket, 1);
+	// Ignore SIGPIPE when supported (ie. BSD/MacOS)
+	setSockNoSIGPIPE((int)metasocket, 1);
 
 	// If Server is at localhost Try to Bind socket to specific adapter before connecting to prevent 2nd instance being recognized as already existing 127.0.0.1 by AdhocServer
 	// (may not works in WinXP/2003 for IPv4 due to "Weak End System" model)
@@ -2207,15 +2225,26 @@ int initNetwork(SceNetAdhocctlAdhocId *adhoc_id){
 
 	if (iResult == SOCKET_ERROR && errorcode != EISCONN) {
 		u64 startTime = (u64)(time_now_d() * 1000000.0);
-		while (IsSocketReady((int)metasocket, false, true) <= 0) {
-			u64 now = (u64)(time_now_d() * 1000000.0);
+		bool done = false;
+		while (!done) {
 			if (coreState == CORE_POWERDOWN) 
 				return iResult;
-			if (now - startTime > (getSockError((int)metasocket) == EINPROGRESS ? adhocDefaultTimeout*2LL: adhocDefaultTimeout))
+
+			done = (IsSocketReady((int)metasocket, false, true) > 0);
+			struct sockaddr_in sin;
+			socklen_t sinlen = sizeof(sin);
+			memset(&sin, 0, sinlen);
+			// Ensure that the connection really established or not, since "select" alone can't accurately detects it
+			done &= (getpeername((int)metasocket, (struct sockaddr*)&sin, &sinlen) != SOCKET_ERROR);
+			u64 now = (u64)(time_now_d() * 1000000.0);
+			if (static_cast<s64>(now - startTime) > adhocDefaultTimeout) {
+				if (connectInProgress(errorcode))
+					errorcode = ETIMEDOUT;
 				break;
+			}
 			sleep_ms(10);
 		}
-		if (IsSocketReady((int)metasocket, false, true) <= 0) {
+		if (!done) {
 			ERROR_LOG(SCENET, "Socket error (%i) when connecting to AdhocServer [%s/%s:%u]", errorcode, g_Config.proAdhocServer.c_str(), ip2str(g_adhocServerIP.in.sin_addr).c_str(), ntohs(g_adhocServerIP.in.sin_port));
 			host->NotifyUserMessage(std::string(n->T("Failed to connect to Adhoc Server")) + " (" + std::string(n->T("Error")) + ": " + std::to_string(errorcode) + ")", 1.0f, 0x0000ff);
 			return iResult;

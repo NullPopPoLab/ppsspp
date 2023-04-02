@@ -136,8 +136,8 @@ public:
 	void SetHoldEnabled(bool hold) {
 		holdEnabled_ = hold;
 	}
-	void Touch(const TouchInput &input) override {
-		UI::Clickable::Touch(input);
+	bool Touch(const TouchInput &input) override {
+		bool retval = UI::Clickable::Touch(input);
 		hovering_ = bounds_.Contains(input.x, input.y);
 		if (hovering_ && (input.flags & TOUCH_DOWN)) {
 			holdStart_ = time_now_d();
@@ -145,6 +145,7 @@ public:
 		if (input.flags & TOUCH_UP) {
 			holdStart_ = 0;
 		}
+		return retval;
 	}
 
 	bool Key(const KeyInput &key) override {
@@ -322,7 +323,17 @@ void GameButton::Draw(UIContext &dc) {
 	dc.Draw()->Flush();
 	dc.RebindTexture();
 	dc.SetFontStyle(dc.theme->uiFont);
-	if (!gridStyle_) {
+	if (gridStyle_ && ginfo->fileType == IdentifiedFileType::PPSSPP_GE_DUMP) {
+		// Super simple drawing for ge dumps.
+		dc.PushScissor(bounds_);
+		const std::string currentTitle = ginfo->GetTitle();
+		dc.SetFontScale(0.6f, 0.6f);
+		dc.DrawText(title_.c_str(), bounds_.x + 4.0f, bounds_.centerY(), style.fgColor, ALIGN_VCENTER | ALIGN_LEFT);
+		dc.SetFontScale(1.0f, 1.0f);
+		title_ = currentTitle;
+		dc.Draw()->Flush();
+		dc.PopScissor();
+	} else if (!gridStyle_) {
 		float tw, th;
 		dc.Draw()->Flush();
 		dc.PushScissor(bounds_);
@@ -423,7 +434,7 @@ public:
 	DirButton(const Path &path, const std::string &text, bool gridStyle, UI::LayoutParams *layoutParams = 0)
 		: UI::Button(text, layoutParams), path_(path), gridStyle_(gridStyle), absolute_(true) {}
 
-	virtual void Draw(UIContext &dc);
+	void Draw(UIContext &dc) override;
 
 	const Path &GetPath() const {
 		return path_;
@@ -587,7 +598,7 @@ bool GameBrowser::DisplayTopBar() {
 bool GameBrowser::HasSpecialFiles(std::vector<Path> &filenames) {
 	if (path_.GetPath().ToString() == "!RECENT") {
 		filenames.clear();
-		for (auto &str : g_Config.recentIsos) {
+		for (auto &str : g_Config.RecentIsos()) {
 			filenames.push_back(Path(str));
 		}
 		return true;
@@ -955,7 +966,6 @@ UI::EventReturn GameBrowser::OnHomebrewStore(UI::EventParams &e) {
 MainScreen::MainScreen() {
 	System_SendMessage("event", "mainscreen");
 	g_BackgroundAudio.SetGame(Path());
-	lastVertical_ = UseVerticalLayout();
 }
 
 MainScreen::~MainScreen() {
@@ -986,7 +996,7 @@ void MainScreen::CreateViews() {
 		System_GetPermissionStatus(SYSTEM_PERMISSION_STORAGE) == PERMISSION_STATUS_GRANTED;
 	bool storageIsTemporary = IsTempPath(GetSysDirectory(DIRECTORY_SAVEDATA)) && !confirmedTemporary_;
 	if (showRecent && !hasStorageAccess) {
-		showRecent = !g_Config.recentIsos.empty();
+		showRecent = g_Config.HasRecentIsos();
 	}
 
 	if (showRecent) {
@@ -1036,7 +1046,7 @@ void MainScreen::CreateViews() {
 		tabAllGames->OnHighlight.Handle(this, &MainScreen::OnGameHighlight);
 		tabHomebrew->OnHighlight.Handle(this, &MainScreen::OnGameHighlight);
 
-		if (g_Config.recentIsos.size() > 0) {
+		if (g_Config.HasRecentIsos()) {
 			tabHolder_->SetCurrentTab(0, true);
 		} else if (g_Config.iMaxRecent > 0) {
 			tabHolder_->SetCurrentTab(1, true);
@@ -1107,16 +1117,17 @@ void MainScreen::CreateViews() {
 	logos->Add(new ImageView(ImageID("I_LOGO"), "PPSSPP", IS_DEFAULT, new AnchorLayoutParams(180, 64, 64, -5.0f, NONE, NONE, false)));
 
 #if !defined(MOBILE_DEVICE)
-	if (!g_Config.bFullScreen) {
+	if (!g_Config.UseFullScreen()) {
 		auto gr = GetI18NCategory("Graphics");
-		fullscreenButton_ = logos->Add(new Button(gr->T("FullScreen", "Full Screen"), ImageID(g_Config.bFullScreen ? "I_RESTORE" : "I_FULLSCREEN"), new AnchorLayoutParams(48, 48, NONE, 0, 0, NONE, false)));
+		ImageID icon(g_Config.UseFullScreen() ? "I_RESTORE" : "I_FULLSCREEN");
+		fullscreenButton_ = logos->Add(new Button(gr->T("FullScreen", "Full Screen"), icon, new AnchorLayoutParams(48, 48, NONE, 0, 0, NONE, false)));
 		fullscreenButton_->SetIgnoreText(true);
 		fullscreenButton_->OnClick.Handle(this, &MainScreen::OnFullScreenToggle);
 	}
 #endif
 
 	rightColumnItems->Add(logos);
-	TextView *ver = rightColumnItems->Add(new TextView(versionString, new LinearLayoutParams(Margins(70, -6, 0, 0))));
+	TextView *ver = rightColumnItems->Add(new TextView(versionString, new LinearLayoutParams(Margins(70, -10, 0, 4))));
 	ver->SetSmall(true);
 	ver->SetClip(false);
 
@@ -1126,7 +1137,8 @@ void MainScreen::CreateViews() {
 	rightColumnItems->Add(new Choice(mm->T("Game Settings", "Settings")))->OnClick.Handle(this, &MainScreen::OnGameSettings);
 	rightColumnItems->Add(new Choice(mm->T("Credits")))->OnClick.Handle(this, &MainScreen::OnCredits);
 	rightColumnItems->Add(new Choice(mm->T("www.ppsspp.org")))->OnClick.Handle(this, &MainScreen::OnPPSSPPOrg);
-	if (!System_GetPropertyBool(SYSPROP_APP_GOLD)) {
+
+	if (!System_GetPropertyBool(SYSPROP_APP_GOLD) && (System_GetPropertyInt(SYSPROP_DEVICE_TYPE) != DEVICE_TYPE_VR)) {
 		Choice *gold = rightColumnItems->Add(new Choice(mm->T("Buy PPSSPP Gold")));
 		gold->OnClick.Handle(this, &MainScreen::OnSupport);
 		gold->SetIcon(ImageID("I_ICONGOLD"), 0.5f);
@@ -1242,15 +1254,6 @@ void MainScreen::sendMessage(const char *message, const char *value) {
 void MainScreen::update() {
 	UIScreen::update();
 	UpdateUIState(UISTATE_MENU);
-	bool vertical = UseVerticalLayout();
-	if (vertical != lastVertical_) {
-		RecreateViews();
-		lastVertical_ = vertical;
-	}
-}
-
-bool MainScreen::UseVerticalLayout() const {
-	return dp_yres > dp_xres * 1.1f;
 }
 
 UI::EventReturn MainScreen::OnLoadFile(UI::EventParams &e) {
@@ -1261,8 +1264,10 @@ UI::EventReturn MainScreen::OnLoadFile(UI::EventParams &e) {
 }
 
 UI::EventReturn MainScreen::OnFullScreenToggle(UI::EventParams &e) {
+	if (g_Config.iForceFullScreen != -1)
+		g_Config.bFullScreen = g_Config.UseFullScreen();
 	if (fullscreenButton_) {
-		fullscreenButton_->SetImageID(ImageID(!g_Config.bFullScreen ? "I_RESTORE" : "I_FULLSCREEN"));
+		fullscreenButton_->SetImageID(ImageID(!g_Config.UseFullScreen() ? "I_RESTORE" : "I_FULLSCREEN"));
 	}
 #if !defined(MOBILE_DEVICE)
 	g_Config.bFullScreen = !g_Config.bFullScreen;
@@ -1418,11 +1423,12 @@ UI::EventReturn MainScreen::OnExit(UI::EventParams &e) {
 }
 
 void MainScreen::dialogFinished(const Screen *dialog, DialogResult result) {
-	if (dialog->tag() == "store") {
+	std::string tag = dialog->tag();
+	if (tag == "Store") {
 		backFromStore_ = true;
 		RecreateViews();
 	}
-	if (dialog->tag() == "game") {
+	if (tag == "Game") {
 		if (!restoreFocusGamePath_.empty() && UI::IsFocusMovementEnabled()) {
 			// Prevent the background from fading, since we just were displaying it.
 			highlightedGamePath_ = restoreFocusGamePath_;
@@ -1484,10 +1490,10 @@ void UmdReplaceScreen::CreateViews() {
 
 	tabAllGames->OnHoldChoice.Handle(this, &UmdReplaceScreen::OnGameSelected);
 
-	rightColumnItems->Add(new Choice(di->T("Cancel")))->OnClick.Handle(this, &UmdReplaceScreen::OnCancel);
+	rightColumnItems->Add(new Choice(di->T("Cancel")))->OnClick.Handle<UIScreen>(this, &UIScreen::OnCancel);
 	rightColumnItems->Add(new Choice(mm->T("Game Settings")))->OnClick.Handle(this, &UmdReplaceScreen::OnGameSettings);
 
-	if (g_Config.recentIsos.size() > 0) {
+	if (g_Config.HasRecentIsos()) {
 		leftColumn->SetCurrentTab(0, true);
 	} else if (g_Config.iMaxRecent > 0) {
 		leftColumn->SetCurrentTab(1, true);
@@ -1506,11 +1512,6 @@ void UmdReplaceScreen::update() {
 UI::EventReturn UmdReplaceScreen::OnGameSelected(UI::EventParams &e) {
 	__UmdReplace(Path(e.s));
 	TriggerFinish(DR_OK);
-	return UI::EVENT_DONE;
-}
-
-UI::EventReturn UmdReplaceScreen::OnCancel(UI::EventParams &e) {
-	TriggerFinish(DR_CANCEL);
 	return UI::EVENT_DONE;
 }
 
@@ -1566,7 +1567,7 @@ UI::EventReturn GridSettingsScreen::GridMinusClick(UI::EventParams &e) {
 }
 
 UI::EventReturn GridSettingsScreen::OnRecentClearClick(UI::EventParams &e) {
-	g_Config.recentIsos.clear();
+	g_Config.ClearRecentIsos();
 	OnRecentChanged.Trigger(e);
 	return UI::EVENT_DONE;
 }

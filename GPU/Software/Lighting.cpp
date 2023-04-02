@@ -24,7 +24,7 @@
 
 namespace Lighting {
 
-static inline Vec3f GetLightVec(u32 lparams[12], int light) {
+static inline Vec3f GetLightVec(const u32 lparams[12], int light) {
 #if defined(_M_SSE) && !PPSSPP_ARCH(X86)
 	__m128i values = _mm_loadu_si128((__m128i *)&lparams[3 * light]);
 	__m128i from24 = _mm_slli_epi32(values, 8);
@@ -276,12 +276,12 @@ void Process(VertexData &vertex, const WorldCoords &worldpos, const WorldCoords 
 	}
 
 	if (state.setColor1) {
-		vertex.color0 = final_color.Clamp(0, 255);
-		vertex.color1 = specular_color.Clamp(0, 255).rgb();
+		vertex.color0 = final_color.Clamp(0, 255).ToRGBA();
+		vertex.color1 = specular_color.Clamp(0, 255).rgb().ToRGB();
 	} else if (state.addColor1) {
-		vertex.color0 = (final_color + specular_color).Clamp(0, 255);
+		vertex.color0 = (final_color + specular_color).Clamp(0, 255).ToRGBA();
 	} else {
-		vertex.color0 = final_color.Clamp(0, 255);
+		vertex.color0 = final_color.Clamp(0, 255).ToRGBA();
 	}
 }
 

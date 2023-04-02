@@ -49,8 +49,6 @@
 
 using namespace Lin;
 
-namespace DX9 {
-
 PSShader::PSShader(LPDIRECT3DDEVICE9 device, FShaderID id, const char *code) : id_(id) {
 	source_ = code;
 #ifdef SHADERLOG
@@ -199,7 +197,7 @@ void ShaderManagerDX9::VSSetColorUniform3(int creg, u32 color) {
 	device_->SetVertexShaderConstantF(creg, f, 1);
 }
 
-void ShaderManagerDX9::VSSetFloatUniform4(int creg, float data[4]) {
+void ShaderManagerDX9::VSSetFloatUniform4(int creg, const float data[4]) {
 	device_->SetVertexShaderConstantF(creg, data, 1);
 }
 
@@ -263,7 +261,7 @@ static void ConvertProjMatrixToD3DThrough(Matrix4x4 &in) {
 	in.translateAndScale(Vec3(xoff, yoff, 0.5f), Vec3(1.0f, 1.0f, 0.5f));
 }
 
-const uint64_t psUniforms = DIRTY_TEXENV | DIRTY_ALPHACOLORREF | DIRTY_ALPHACOLORMASK | DIRTY_FOGCOLOR | DIRTY_STENCILREPLACEVALUE | DIRTY_SHADERBLEND | DIRTY_TEXCLAMP;
+const uint64_t psUniforms = DIRTY_TEXENV | DIRTY_ALPHACOLORREF | DIRTY_ALPHACOLORMASK | DIRTY_FOGCOLOR | DIRTY_STENCILREPLACEVALUE | DIRTY_SHADERBLEND | DIRTY_TEXCLAMP | DIRTY_MIPBIAS;
 
 void ShaderManagerDX9::PSUpdateUniforms(u64 dirtyUniforms) {
 	if (dirtyUniforms & DIRTY_TEXENV) {
@@ -314,6 +312,14 @@ void ShaderManagerDX9::PSUpdateUniforms(u64 dirtyUniforms) {
 		};
 		PSSetFloatArray(CONST_PS_TEXCLAMP, texclamp, 4);
 		PSSetFloatArray(CONST_PS_TEXCLAMPOFF, texclampoff, 2);
+	}
+
+	if (dirtyUniforms & DIRTY_MIPBIAS) {
+		float mipBias = (float)gstate.getTexLevelOffset16() * (1.0 / 16.0f);
+
+		// NOTE: This equation needs some adjustment in D3D9. Can't get it to look completely smooth :(
+		mipBias = (mipBias + 0.25f) / (float)(gstate.getTextureMaxLevel() + 1);
+		PSSetFloatArray(CONST_PS_MIPBIAS, &mipBias, 1);
 	}
 }
 
@@ -446,6 +452,12 @@ void ShaderManagerDX9::VSUpdateUniforms(u64 dirtyUniforms) {
 
 		float data[4] = { viewZScale, viewZCenter, reverseTranslate, reverseScale };
 		VSSetFloatUniform4(CONST_VS_DEPTHRANGE, data);
+
+		if (draw_->GetDeviceCaps().clipPlanesSupported >= 1) {
+			float clip[4] = { 0.0f, 0.0f, reverseScale, 1.0f - reverseTranslate * reverseScale };
+			// Well, not a uniform, but we treat it as one like other backends.
+			device_->SetClipPlane(0, clip);
+		}
 	}
 	if (dirtyUniforms & DIRTY_CULLRANGE) {
 		float minValues[4], maxValues[4];
@@ -538,15 +550,11 @@ void ShaderManagerDX9::DirtyLastShader() { // disables vertex arrays
 	lastPShader_ = nullptr;
 }
 
-VSShader *ShaderManagerDX9::ApplyShader(bool useHWTransform, bool useHWTessellation, u32 vertType, bool weightsAsFloat) {
-	// Always use software for flat shading to fix the provoking index.
-	bool tess = gstate_c.submitType == SubmitType::HW_BEZIER || gstate_c.submitType == SubmitType::HW_SPLINE;
-	useHWTransform = useHWTransform && (tess || gstate.getShadeMode() != GE_SHADE_FLAT);
-
+VSShader *ShaderManagerDX9::ApplyShader(bool useHWTransform, bool useHWTessellation, u32 vertType, bool weightsAsFloat, bool useSkinInDecode, const ComputedPipelineState &pipelineState) {
 	VShaderID VSID;
 	if (gstate_c.IsDirty(DIRTY_VERTEXSHADER_STATE)) {
 		gstate_c.Clean(DIRTY_VERTEXSHADER_STATE);
-		ComputeVertexShaderID(&VSID, vertType, useHWTransform, useHWTessellation, weightsAsFloat);
+		ComputeVertexShaderID(&VSID, vertType, useHWTransform, useHWTessellation, weightsAsFloat, useSkinInDecode);
 	} else {
 		VSID = lastVSID_;
 	}
@@ -554,7 +562,7 @@ VSShader *ShaderManagerDX9::ApplyShader(bool useHWTransform, bool useHWTessellat
 	FShaderID FSID;
 	if (gstate_c.IsDirty(DIRTY_FRAGMENTSHADER_STATE)) {
 		gstate_c.Clean(DIRTY_FRAGMENTSHADER_STATE);
-		ComputeFragmentShaderID(&FSID, draw_->GetBugs());
+		ComputeFragmentShaderID(&FSID, pipelineState, draw_->GetBugs());
 	} else {
 		FSID = lastFSID_;
 	}
@@ -579,7 +587,8 @@ VSShader *ShaderManagerDX9::ApplyShader(bool useHWTransform, bool useHWTessellat
 		std::string genErrorString;
 		uint32_t attrMask;
 		uint64_t uniformMask;
-		if (GenerateVertexShader(VSID, codeBuffer_, draw_->GetShaderLanguageDesc(), draw_->GetBugs(), &attrMask, &uniformMask, &genErrorString)) {
+		VertexShaderFlags flags;
+		if (GenerateVertexShader(VSID, codeBuffer_, draw_->GetShaderLanguageDesc(), draw_->GetBugs(), &attrMask, &uniformMask, &flags, &genErrorString)) {
 			vs = new VSShader(device_, VSID, codeBuffer_, useHWTransform);
 		}
 		if (!vs || vs->Failed()) {
@@ -595,7 +604,7 @@ VSShader *ShaderManagerDX9::ApplyShader(bool useHWTransform, bool useHWTessellat
 			}
 			delete vs;
 
-			ComputeVertexShaderID(&VSID, vertType, false, false, weightsAsFloat);
+			ComputeVertexShaderID(&VSID, vertType, false, false, weightsAsFloat, useSkinInDecode);
 
 			// TODO: Look for existing shader with the appropriate ID, use that instead of generating a new one - however, need to make sure
 			// that that shader ID is not used when computing the linked shader ID below, because then IDs won't match
@@ -604,7 +613,7 @@ VSShader *ShaderManagerDX9::ApplyShader(bool useHWTransform, bool useHWTessellat
 			// Can still work with software transform.
 			uint32_t attrMask;
 			uint64_t uniformMask;
-			bool success = GenerateVertexShader(VSID, codeBuffer_, draw_->GetShaderLanguageDesc(), draw_->GetBugs(), &attrMask, &uniformMask, &genErrorString);
+			bool success = GenerateVertexShader(VSID, codeBuffer_, draw_->GetShaderLanguageDesc(), draw_->GetBugs(), &attrMask, &uniformMask, &flags, &genErrorString);
 			_assert_(success);
 			vs = new VSShader(device_, VSID, codeBuffer_, false);
 		}
@@ -621,7 +630,8 @@ VSShader *ShaderManagerDX9::ApplyShader(bool useHWTransform, bool useHWTessellat
 		// Fragment shader not in cache. Let's compile it.
 		std::string errorString;
 		uint64_t uniformMask;
-		bool success = GenerateFragmentShader(FSID, codeBuffer_, draw_->GetShaderLanguageDesc(), draw_->GetBugs(), &uniformMask, &errorString);
+		FragmentShaderFlags flags;
+		bool success = GenerateFragmentShader(FSID, codeBuffer_, draw_->GetShaderLanguageDesc(), draw_->GetBugs(), &uniformMask, &flags, &errorString);
 		// We're supposed to handle all possible cases.
 		_assert_(success);
 		fs = new PSShader(device_, FSID, codeBuffer_);
@@ -698,5 +708,3 @@ std::string ShaderManagerDX9::DebugGetShaderString(std::string id, DebugShaderTy
 		return "N/A";
 	}
 }
-
-}  // namespace

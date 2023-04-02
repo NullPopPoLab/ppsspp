@@ -33,6 +33,9 @@ size_t DataFormatSizeInBytes(DataFormat fmt) {
 	case DataFormat::R8G8B8A8_SNORM: return 4;
 	case DataFormat::R8G8B8A8_UINT: return 4;
 	case DataFormat::R8G8B8A8_SINT: return 4;
+
+	case DataFormat::R16_UNORM: return 2;
+
 	case DataFormat::R16_FLOAT: return 2;
 	case DataFormat::R16G16_FLOAT: return 4;
 	case DataFormat::R16G16B16A16_FLOAT: return 8;
@@ -43,6 +46,7 @@ size_t DataFormatSizeInBytes(DataFormat fmt) {
 
 	case DataFormat::S8: return 1;
 	case DataFormat::D16: return 2;
+	case DataFormat::D16_S8: return 3;
 	case DataFormat::D24_S8: return 4;
 	case DataFormat::D32F: return 4;
 	// Or maybe 8...
@@ -53,9 +57,32 @@ size_t DataFormatSizeInBytes(DataFormat fmt) {
 	}
 }
 
+const char *DataFormatToString(DataFormat fmt) {
+	switch (fmt) {
+	case DataFormat::R8_UNORM: return "R8_UNORM";
+	case DataFormat::R8G8_UNORM: return "R8G8_UNORM";
+	case DataFormat::R8G8B8A8_UNORM: return "R8G8B8A8_UNORM";
+	case DataFormat::B8G8R8A8_UNORM: return "B8G8R8A8_UNORM";
+	case DataFormat::R16_UNORM: return "R16_UNORM";
+	case DataFormat::R16_FLOAT: return "R16_FLOAT";
+	case DataFormat::R32_FLOAT: return "R32_FLOAT";
+
+	case DataFormat::S8: return "S8";
+	case DataFormat::D16: return "D16";
+	case DataFormat::D16_S8: return "D16_S8";
+	case DataFormat::D24_S8: return "D24_S8";
+	case DataFormat::D32F: return "D32F";
+	case DataFormat::D32F_S8: return "D32F_S8";
+
+	default:
+		return "(N/A)";
+	}
+}
+
 bool DataFormatIsDepthStencil(DataFormat fmt) {
 	switch (fmt) {
 	case DataFormat::D16:
+	case DataFormat::D16_S8:
 	case DataFormat::D24_S8:
 	case DataFormat::S8:
 	case DataFormat::D32F:
@@ -66,10 +93,15 @@ bool DataFormatIsDepthStencil(DataFormat fmt) {
 	}
 }
 
+RefCountedObject::~RefCountedObject() {
+	_dbg_assert_(refcount_ == 0xDEDEDE);
+}
 
 bool RefCountedObject::Release() {
 	if (refcount_ > 0 && refcount_ < 10000) {
 		if (--refcount_ == 0) {
+			// Make it very obvious if we try to free this again.
+			refcount_ = 0xDEDEDE;
 			delete this;
 			return true;
 		}
@@ -283,6 +315,27 @@ const UniformBufferDesc vsColBufDesc { sizeof(VsColUB), {
 	{ "TintSaturation", 4, -1, UniformType::FLOAT2, 64 },
 } };
 
+static const std::vector<ShaderSource> vsTexColNoTint = { {
+	GLSL_1xx,
+	R"(
+#if __VERSION__ >= 130
+#define attribute in
+#define varying out
+#endif
+attribute vec3 Position;
+attribute vec4 Color0;
+attribute vec2 TexCoord0;
+varying vec4 oColor0;
+varying vec2 oTexCoord0;
+uniform mat4 WorldViewProj;
+uniform vec2 TintSaturation;
+void main() {
+	gl_Position = WorldViewProj * vec4(Position, 1.0);
+    oColor0 = Color0;
+	oTexCoord0 = TexCoord0;
+})"
+} };
+
 static const std::vector<ShaderSource> vsTexCol = {
 	{ GLSL_1xx,
 	R"(
@@ -406,7 +459,7 @@ vec3 hsv2rgb(vec3 c) {
 }
 layout (location = 0) in vec4 pos;
 layout (location = 1) in vec4 inColor;
-layout (location = 2) in vec2 inTexCoord;
+layout (location = 3) in vec2 inTexCoord;
 layout (location = 0) out vec4 outColor;
 layout (location = 1) out vec2 outTexCoord;
 out gl_PerVertex { vec4 gl_Position; };
@@ -420,6 +473,8 @@ void main() {
 }
 )"
 } };
+
+static_assert(SEM_TEXCOORD0 == 3, "Semantic shader hardcoded in glsl above.");
 
 const UniformBufferDesc vsTexColBufDesc{ sizeof(VsTexColUB),{
 	{ "WorldViewProj", 0, -1, UniformType::MATRIX4X4, 0 },
@@ -437,7 +492,12 @@ ShaderModule *CreateShader(DrawContext *draw, ShaderStage stage, const std::vect
 }
 
 bool DrawContext::CreatePresets() {
-	vsPresets_[VS_TEXTURE_COLOR_2D] = CreateShader(this, ShaderStage::Vertex, vsTexCol);
+	if (bugs_.Has(Bugs::RASPBERRY_SHADER_COMP_HANG)) {
+		vsPresets_[VS_TEXTURE_COLOR_2D] = CreateShader(this, ShaderStage::Vertex, vsTexColNoTint);
+	} else {
+		vsPresets_[VS_TEXTURE_COLOR_2D] = CreateShader(this, ShaderStage::Vertex, vsTexCol);
+	}
+
 	vsPresets_[VS_COLOR_2D] = CreateShader(this, ShaderStage::Vertex, vsCol);
 
 	fsPresets_[FS_TEXTURE_COLOR_2D] = CreateShader(this, ShaderStage::Fragment, fsTexCol);
@@ -550,7 +610,36 @@ void ConvertFromBGRA8888(uint8_t *dst, const uint8_t *src, uint32_t dstStride, u
 			dst += dstStride * 3;
 		}
 	} else {
-		WARN_LOG(G3D, "Unable to convert from format to BGRA: %d", (int)format);
+		// But here it shouldn't matter if they do intersect
+		uint16_t *dst16 = (uint16_t *)dst;
+		switch (format) {
+		case Draw::DataFormat::R5G6B5_UNORM_PACK16: // BGR 565
+			for (uint32_t y = 0; y < height; ++y) {
+				ConvertBGRA8888ToRGB565(dst16, src32, width);
+				src32 += srcStride;
+				dst16 += dstStride;
+			}
+			break;
+		case Draw::DataFormat::A1R5G5B5_UNORM_PACK16: // ABGR 1555
+			for (uint32_t y = 0; y < height; ++y) {
+				ConvertBGRA8888ToRGBA5551(dst16, src32, width);
+				src32 += srcStride;
+				dst16 += dstStride;
+			}
+			break;
+		case Draw::DataFormat::A4R4G4B4_UNORM_PACK16: // ABGR 4444
+			for (uint32_t y = 0; y < height; ++y) {
+				ConvertBGRA8888ToRGBA4444(dst16, src32, width);
+				src32 += srcStride;
+				dst16 += dstStride;
+			}
+			break;
+		case Draw::DataFormat::R8G8B8A8_UNORM:
+		case Draw::DataFormat::UNDEFINED:
+		default:
+			WARN_LOG(G3D, "Unable to convert from format to BGRA: %d", (int)format);
+			break;
+		}
 	}
 }
 
@@ -592,5 +681,65 @@ void ConvertToD32F(uint8_t *dst, const uint8_t *src, uint32_t dstStride, uint32_
 	}
 }
 
+// TODO: This is missing the conversion to the quarter-range we use if depth clamp is not available.
+// That conversion doesn't necessarily belong here in thin3d, though.
+void ConvertToD16(uint8_t *dst, const uint8_t *src, uint32_t dstStride, uint32_t srcStride, uint32_t width, uint32_t height, DataFormat format) {
+	if (format == Draw::DataFormat::D32F) {
+		const float *src32 = (const float *)src;
+		uint16_t *dst16 = (uint16_t *)dst;
+		if (src == dst) {
+			return;
+		} else {
+			for (uint32_t y = 0; y < height; ++y) {
+				for (uint32_t x = 0; x < width; ++x) {
+					dst16[x] = (uint16_t)(src32[x] * 65535.0f);
+				}
+				src32 += srcStride;
+				dst16 += dstStride;
+			}
+		}
+	} else if (format == Draw::DataFormat::D16) {
+		_assert_(src != dst);
+		const uint16_t *src16 = (const uint16_t *)src;
+		uint16_t *dst16 = (uint16_t *)dst;
+		for (uint32_t y = 0; y < height; ++y) {
+			memcpy(dst16, src16, width * 2);
+			src16 += srcStride;
+			dst16 += dstStride;
+		}
+	} else if (format == Draw::DataFormat::D24_S8) {
+		_assert_(src != dst);
+		const uint32_t *src32 = (const uint32_t *)src;
+		uint16_t *dst16 = (uint16_t *)dst;
+		for (uint32_t y = 0; y < height; ++y) {
+			for (uint32_t x = 0; x < width; ++x) {
+				dst16[x] = (src32[x] & 0x00FFFFFF) >> 8;
+			}
+			src32 += srcStride;
+			dst16 += dstStride;
+		}
+	} else {
+		assert(false);
+	}
+}
+
+const char *Bugs::GetBugName(uint32_t bug) {
+	switch (bug) {
+	case NO_DEPTH_CANNOT_DISCARD_STENCIL: return "NO_DEPTH_CANNOT_DISCARD_STENCIL";
+	case DUAL_SOURCE_BLENDING_BROKEN: return "DUAL_SOURCE_BLENDING_BROKEN";
+	case ANY_MAP_BUFFER_RANGE_SLOW: return "ANY_MAP_BUFFER_RANGE_SLOW";
+	case PVR_GENMIPMAP_HEIGHT_GREATER: return "PVR_GENMIPMAP_HEIGHT_GREATER";
+	case BROKEN_NAN_IN_CONDITIONAL: return "BROKEN_NAN_IN_CONDITIONAL";
+	case COLORWRITEMASK_BROKEN_WITH_DEPTHTEST: return "COLORWRITEMASK_BROKEN_WITH_DEPTHTEST";
+	case BROKEN_FLAT_IN_SHADER: return "BROKEN_FLAT_IN_SHADER";
+	case EQUAL_WZ_CORRUPTS_DEPTH: return "EQUAL_WZ_CORRUPTS_DEPTH";
+	case RASPBERRY_SHADER_COMP_HANG: return "RASPBERRY_SHADER_COMP_HANG";
+	case MALI_CONSTANT_LOAD_BUG: return "MALI_CONSTANT_LOAD_BUG";
+	case SUBPASS_FEEDBACK_BROKEN: return "SUBPASS_FEEDBACK_BROKEN";
+	case GEOMETRY_SHADERS_SLOW_OR_BROKEN: return "GEOMETRY_SHADERS_SLOW_OR_BROKEN";
+	case ADRENO_RESOURCE_DEADLOCK: return "ADRENO_RESOURCE_DEADLOCK";
+	default: return "(N/A)";
+	}
+}
 
 }  // namespace Draw

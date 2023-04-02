@@ -23,7 +23,7 @@
 
 #include "GPU/GPUCommon.h"
 #include "GPU/D3D11/DrawEngineD3D11.h"
-#include "GPU/D3D11/DepalettizeShaderD3D11.h"
+#include "GPU/Common/TextureShaderCommon.h"
 #include "GPU/Common/VertexDecoderCommon.h"
 
 class FramebufferManagerD3D11;
@@ -36,38 +36,27 @@ public:
 	GPU_D3D11(GraphicsContext *gfxCtx, Draw::DrawContext *draw);
 	~GPU_D3D11();
 
-	void CheckGPUFeatures() override;
+	u32 CheckGPUFeatures() const override;
 	void PreExecuteOp(u32 op, u32 diff) override;
 	void ExecuteOp(u32 op, u32 diff) override;
 
-	void ReapplyGfxState() override;
-	void SetDisplayFramebuffer(u32 framebuf, u32 stride, GEBufferFormat format) override;
 	void GetStats(char *buffer, size_t bufsize) override;
-	void ClearCacheNextFrame() override;
 	void DeviceLost() override;  // Only happens on Android. Drop all textures and shaders.
 	void DeviceRestore() override;
 
 	void DoState(PointerWrap &p) override;
 
-	void ClearShaderCache() override;
-
 	// Using string because it's generic - makes no assumptions on the size of the shader IDs of this backend.
 	std::vector<std::string> DebugGetShaderIDs(DebugShaderType shader) override;
 	std::string DebugGetShaderString(std::string id, DebugShaderType shader, DebugShaderStringType stringType) override;
-
-	void BeginHostFrame() override;
-	void EndHostFrame() override;
 
 protected:
 	void FinishDeferred() override;
 
 private:
-	void Flush() {
-		drawEngine_.Flush();
-	}
 	// void ApplyDrawState(int prim);
 	void CheckFlushOp(int cmd, u32 diff);
-	void BuildReportingInfo();
+	void BuildReportingInfo() override;
 
 	void InitClear() override;
 	void BeginFrame() override;
@@ -78,7 +67,6 @@ private:
 
 	FramebufferManagerD3D11 *framebufferManagerD3D11_;
 	TextureCacheD3D11 *textureCacheD3D11_;
-	DepalShaderCacheD3D11 *depalShaderCache_;
 	DrawEngineD3D11 drawEngine_;
 	ShaderManagerD3D11 *shaderManagerD3D11_;
 };

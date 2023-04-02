@@ -13,9 +13,8 @@
 #include <thread>
 #include <atomic>
 
-#include <android/log.h>
-
 #ifndef _MSC_VER
+
 #include <jni.h>
 #include <android/native_window_jni.h>
 #include <android/log.h>
@@ -70,6 +69,7 @@ struct JNIEnv {};
 #include "Common/Profiler/Profiler.h"
 #include "Common/Math/math_util.h"
 #include "Common/Data/Text/Parsers.h"
+#include "Common/VR/PPSSPPVR.h"
 
 #include "Common/Log.h"
 #include "Common/GraphicsContext.h"
@@ -197,37 +197,52 @@ AndroidGraphicsContext *graphicsContext;
 #define LOG_APP_NAME "PPSSPP"
 #endif
 
-#ifdef _DEBUG
-#define DLOG(...)    __android_log_print(ANDROID_LOG_INFO, LOG_APP_NAME, __VA_ARGS__);
-#else
-#define DLOG(...)
-#endif
-
-#define ILOG(...)    __android_log_print(ANDROID_LOG_INFO, LOG_APP_NAME, __VA_ARGS__);
-#define WLOG(...)    __android_log_print(ANDROID_LOG_WARN, LOG_APP_NAME, __VA_ARGS__);
-#define ELOG(...)    __android_log_print(ANDROID_LOG_ERROR, LOG_APP_NAME, __VA_ARGS__);
-#define FLOG(...)    __android_log_print(ANDROID_LOG_FATAL, LOG_APP_NAME, __VA_ARGS__);
-
 #define MessageBox(a, b, c, d) __android_log_print(ANDROID_LOG_INFO, APP_NAME, "%s %s", (b), (c));
 
+#if PPSSPP_ARCH(ARMV7)
+// Old Android workaround
+extern "C" {
+int utimensat(int fd, const char *path, const struct timespec times[2]) {
+	return -1;
+}
+}
+#endif
+
 void AndroidLogger::Log(const LogMessage &message) {
-	// Log with simplified headers as Android already provides timestamp etc.
+	int mode;
 	switch (message.level) {
-	case LogTypes::LVERBOSE:
-	case LogTypes::LDEBUG:
-	case LogTypes::LINFO:
-		ILOG("[%s] %s", message.log, message.msg.c_str());
+	case LogTypes::LWARNING:
+		mode = ANDROID_LOG_WARN;
 		break;
 	case LogTypes::LERROR:
-		ELOG("[%s] %s", message.log, message.msg.c_str());
+		mode = ANDROID_LOG_ERROR;
 		break;
-	case LogTypes::LWARNING:
-		WLOG("[%s] %s", message.log, message.msg.c_str());
-		break;
-	case LogTypes::LNOTICE:
 	default:
-		ILOG("[%s] !!! %s", message.log, message.msg.c_str());
+		mode = ANDROID_LOG_INFO;
 		break;
+	}
+
+	// Long log messages need splitting up.
+	// Not sure what the actual limit is (seems to vary), but let's be conservative.
+	const size_t maxLogLength = 512;
+	if (message.msg.length() < maxLogLength) {
+		// Log with simplified headers as Android already provides timestamp etc.
+		__android_log_print(mode, LOG_APP_NAME, "[%s] %s", message.log, message.msg.c_str());
+	} else {
+		std::string msg = message.msg;
+
+		// Ideally we should split at line breaks, but it's at least fairly usable anyway.
+		std::string first_part = msg.substr(0, maxLogLength);
+		__android_log_print(mode, LOG_APP_NAME, "[%s] %s", message.log, first_part.c_str());
+		msg = msg.substr(maxLogLength);
+
+		while (msg.length() > maxLogLength) {
+			std::string first_part = msg.substr(0, maxLogLength);
+			__android_log_print(mode, LOG_APP_NAME, "%s", first_part.c_str());
+			msg = msg.substr(maxLogLength);
+		}
+		// Print the final part.
+		__android_log_print(mode, LOG_APP_NAME, "%s", msg.c_str());
 	}
 }
 
@@ -279,7 +294,12 @@ static void EmuThreadFunc() {
 	} else {
 		INFO_LOG(SYSTEM, "Runloop: Graphics context available! %p", graphicsContext);
 	}
-	NativeInitGraphics(graphicsContext);
+
+	if (!NativeInitGraphics(graphicsContext)) {
+		_assert_msg_(false, "Failed to initialize graphics, might as well bail");
+		emuThreadState = (int)EmuThreadState::QUIT_REQUESTED;
+		return;
+	}
 
 	INFO_LOG(SYSTEM, "Graphics initialized. Entering loop.");
 
@@ -329,7 +349,7 @@ void PushCommand(std::string cmd, std::string param) {
 }
 
 // Android implementation of callbacks to the Java part of the app
-void SystemToast(const char *text) {
+void System_Toast(const char *text) {
 	PushCommand("toast", text);
 }
 
@@ -452,12 +472,14 @@ bool System_GetPropertyBool(SystemProperty prop) {
 	case SYSPROP_HAS_FILE_BROWSER:
 		// It's only really needed with scoped storage, but why not make it available
 		// as far back as possible - works just fine.
-		return androidVersion >= 19;  // when ACTION_OPEN_DOCUMENT was added
+		return (androidVersion >= 19) && (deviceType != DEVICE_TYPE_VR);  // when ACTION_OPEN_DOCUMENT was added
 	case SYSPROP_HAS_FOLDER_BROWSER:
 		// Uses OPEN_DOCUMENT_TREE to let you select a folder.
 		// Doesn't actually mean it's usable though, in many early versions of Android
 		// this dialog is complete garbage and only lets you select subfolders of the Downloads folder.
 		return androidVersion >= 21;  // when ACTION_OPEN_DOCUMENT_TREE was added
+	case SYSPROP_SUPPORTS_OPEN_FILE_IN_EDITOR:
+		return false;  // Update if we add support in FileUtil.cpp: OpenFileInEditor
 	case SYSPROP_APP_GOLD:
 #ifdef GOLD
 		return true;
@@ -753,6 +775,12 @@ retry:
 		INFO_LOG(SYSTEM, "NativeApp.init() - launching emu thread");
 		EmuThreadStart();
 	}
+
+	if (IsVREnabled()) {
+		Version gitVer(PPSSPP_GIT_VERSION);
+		InitVROnAndroid(gJvm, nativeActivity, systemName.c_str(), gitVer.ToInteger(), "PPSSPP");
+		SetVRCallbacks(NativeAxis, NativeKey, NativeTouch);
+	}
 }
 
 extern "C" void Java_org_ppsspp_ppsspp_NativeApp_audioInit(JNIEnv *, jclass) {
@@ -868,6 +896,9 @@ extern "C" void Java_org_ppsspp_ppsspp_NativeApp_shutdown(JNIEnv *, jclass) {
 
 // JavaEGL
 extern "C" bool Java_org_ppsspp_ppsspp_NativeRenderer_displayInit(JNIEnv * env, jobject obj) {
+
+	bool firstStart = !renderer_inited;
+
 	// We should be running on the render thread here.
 	std::string errorMessage;
 	if (renderer_inited) {
@@ -892,7 +923,7 @@ extern "C" bool Java_org_ppsspp_ppsspp_NativeRenderer_displayInit(JNIEnv * env, 
 		INFO_LOG(G3D, "Shut down both threads. Now let's bring it up again!");
 
 		if (!graphicsContext->InitFromRenderThread(nullptr, 0, 0, 0, 0)) {
-			SystemToast("Graphics initialization failed. Quitting.");
+			System_Toast("Graphics initialization failed. Quitting.");
 			return false;
 		}
 
@@ -905,7 +936,7 @@ extern "C" bool Java_org_ppsspp_ppsspp_NativeRenderer_displayInit(JNIEnv * env, 
 		} else {
 			if (!NativeInitGraphics(graphicsContext)) {
 				// Gonna be in a weird state here, not good.
-				SystemToast("Failed to initialize graphics.");
+				System_Toast("Failed to initialize graphics.");
 				return false;
 			}
 		}
@@ -915,7 +946,7 @@ extern "C" bool Java_org_ppsspp_ppsspp_NativeRenderer_displayInit(JNIEnv * env, 
 	} else {
 		INFO_LOG(G3D, "NativeApp.displayInit() first time");
 		if (!graphicsContext->InitFromRenderThread(nullptr, 0, 0, 0, 0)) {
-			SystemToast("Graphics initialization failed. Quitting.");
+			System_Toast("Graphics initialization failed. Quitting.");
 			return false;
 		}
 
@@ -927,6 +958,11 @@ extern "C" bool Java_org_ppsspp_ppsspp_NativeRenderer_displayInit(JNIEnv * env, 
 		renderer_inited = true;
 	}
 	NativeMessageReceived("recreateviews", "");
+
+	if (IsVREnabled()) {
+		EnterVR(firstStart, graphicsContext->GetAPIContext());
+	}
+
 	return true;
 }
 
@@ -965,6 +1001,10 @@ extern "C" void JNICALL Java_org_ppsspp_ppsspp_NativeApp_backbufferResize(JNIEnv
 	pixel_xres = bufw;
 	pixel_yres = bufh;
 	backbuffer_format = format;
+
+	if (IsVREnabled()) {
+		GetVRResolutionPerEye(&pixel_xres, &pixel_yres);
+	}
 
 	recalculateDpi();
 
@@ -1037,12 +1077,20 @@ extern "C" void Java_org_ppsspp_ppsspp_NativeRenderer_displayRender(JNIEnv *env,
 		SetCurrentThreadName("AndroidRender");
 	}
 
+	if (IsVREnabled() && !StartVRRender())
+		return;
+
 	if (useCPUThread) {
 		// This is the "GPU thread".
-		if (graphicsContext)
-			graphicsContext->ThreadFrame();
+		if (!graphicsContext || !graphicsContext->ThreadFrame())
+			return;
 	} else {
 		UpdateRunLoopAndroid(env);
+	}
+
+	if (IsVREnabled()) {
+		UpdateVRInput(g_Config.bHapticFeedback, dp_xscale, dp_yscale);
+		FinishVRRender();
 	}
 }
 
@@ -1262,6 +1310,15 @@ void getDesiredBackbufferSize(int &sz_x, int &sz_y) {
 
 extern "C" void JNICALL Java_org_ppsspp_ppsspp_NativeApp_setDisplayParameters(JNIEnv *, jclass, jint xres, jint yres, jint dpi, jfloat refreshRate) {
 	INFO_LOG(G3D, "NativeApp.setDisplayParameters(%d x %d, dpi=%d, refresh=%0.2f)", xres, yres, dpi, refreshRate);
+
+	if (IsVREnabled()) {
+		int width, height;
+		GetVRResolutionPerEye(&width, &height);
+		xres = width;
+		yres = height * 272 / 480;
+		dpi = 320;
+	}
+
 	bool changed = false;
 	changed = changed || display_xres != xres || display_yres != yres;
 	changed = changed || display_dpi_x != dpi || display_dpi_y != dpi;
@@ -1383,7 +1440,7 @@ extern "C" bool JNICALL Java_org_ppsspp_ppsspp_NativeActivity_runEGLRenderLoop(J
 			return true;
 		} else {
 			ERROR_LOG(G3D, "Failed to initialize graphics context.");
-			SystemToast("Failed to initialize graphics context.");
+			System_Toast("Failed to initialize graphics context.");
 			return false;
 		}
 	};

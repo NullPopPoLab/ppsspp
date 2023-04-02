@@ -39,7 +39,7 @@ const char *I18NCategory::T(const char *key, const char *def) {
 		if (def)
 			missedKeyLog_[key] = def;
 		else
-			missedKeyLog_[key] = modifiedKey.c_str();
+			missedKeyLog_[key] = modifiedKey;
 //		INFO_LOG(SYSTEM, "Missed translation key in %s: %s", name_.c_str(), key);
 		return def ? def : key;
 	}
@@ -67,13 +67,13 @@ std::shared_ptr<I18NCategory> I18NRepo::GetCategory(const char *category) {
 	}
 }
 
-std::string I18NRepo::GetIniPath(const std::string &languageID) const {
-	return "lang/" + languageID + ".ini";
+Path I18NRepo::GetIniPath(const std::string &languageID) const {
+	return Path("lang") / (languageID + ".ini");
 }
 
 bool I18NRepo::IniExists(const std::string &languageID) const {
 	File::FileInfo info;
-	if (!VFSGetFileInfo(GetIniPath(languageID).c_str(), &info))
+	if (!VFSGetFileInfo(GetIniPath(languageID).ToString().c_str(), &info))
 		return false;
 	if (!info.exists)
 		return false;
@@ -88,7 +88,7 @@ bool I18NRepo::LoadIni(const std::string &languageID, const Path &overridePath) 
 	if (!overridePath.empty()) {
 		iniPath = overridePath / (languageID + ".ini");
 	} else {
-		iniPath = Path(GetIniPath(languageID));
+		iniPath = GetIniPath(languageID);
 	}
 
 	if (!ini.LoadFromVFS(iniPath.ToString()))
@@ -107,6 +107,17 @@ bool I18NRepo::LoadIni(const std::string &languageID, const Path &overridePath) 
 
 	languageID_ = languageID;
 	return true;
+}
+
+std::map<std::string, std::vector<std::string>> I18NRepo::GetMissingKeys() const {
+	std::map<std::string, std::vector<std::string>> ret;
+	std::lock_guard<std::mutex> guard(catsLock_);
+	for (auto &cat : cats_) {
+		for (auto &key : cat.second->Missed()) {
+			ret[cat.first].push_back(key.first);
+		}
+	}
+	return ret;
 }
 
 I18NCategory *I18NRepo::LoadSection(const Section *section, const char *name) {

@@ -4,9 +4,12 @@
 #include <cstdint>
 #include <cstddef>  // for size_t
 
+#include "Common/Common.h"
+
 // GLSL_1xx and GLSL_3xx each cover a lot of sub variants. All the little quirks
 // that differ are covered in ShaderLanguageDesc.
 // Defined as a bitmask so stuff like GetSupportedShaderLanguages can return combinations.
+// TODO: We can probably move away from this distinction soon, now that we mostly generate/translate shaders.
 enum ShaderLanguage {
 	GLSL_1xx = 1,
 	GLSL_3xx = 2,
@@ -30,7 +33,6 @@ enum class ShaderStage {
 
 const char *ShaderStageAsString(ShaderStage lang);
 
-
 struct ShaderLanguageDesc {
 	ShaderLanguageDesc() {}
 	explicit ShaderLanguageDesc(ShaderLanguage lang);
@@ -46,11 +48,14 @@ struct ShaderLanguageDesc {
 	const char *fragColor0 = nullptr;
 	const char *fragColor1 = nullptr;
 	const char *texture = nullptr;
+	const char *texture3D = nullptr;
 	const char *texelFetch = nullptr;
 	const char *lastFragData = nullptr;
 	const char *framebufferFetchExtension = nullptr;
 	const char *vsOutPrefix = "";
 	const char *viewportYSign = "";
+
+	bool vertexIndex = false;
 	bool glslES30 = false;  // really glslES30Features. TODO: Clean this up.
 	bool bitwiseOps = false;
 	bool forceMatrix4x4 = false;
@@ -80,6 +85,24 @@ struct UniformDesc {
 struct UniformBufferDesc {
 	size_t uniformBufferSize;
 	std::vector<UniformDesc> uniforms;
+};
+
+struct UniformDef {
+	const char *type;
+	const char *name;
+	int index;
+};
+
+enum class SamplerFlags {
+	ARRAY_ON_VULKAN = 1,
+};
+ENUM_CLASS_BITOPS(SamplerFlags);
+
+struct SamplerDef {
+	int binding;  // Might only be used by some backends.
+	const char *name;
+	SamplerFlags flags;
+	// TODO: Might need unsigned samplers, 3d samplers, or other types in the future.
 };
 
 // For passing error messages from shader compilation (and other critical issues) back to the host.

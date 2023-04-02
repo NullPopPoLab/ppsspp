@@ -176,7 +176,7 @@ bool RemoteISOConnectScreen::FindServer(std::string &resultHost, int &resultPort
 	};
 
 	// Try last server first, if it is set
-	if (g_Config.iLastRemoteISOPort && g_Config.sLastRemoteISOServer != "") {
+	if (g_Config.iLastRemoteISOPort && !g_Config.sLastRemoteISOServer.empty()) {
 		if (TryServer(g_Config.sLastRemoteISOServer.c_str(), g_Config.iLastRemoteISOPort)) {
 			return true;
 		}
@@ -517,10 +517,10 @@ RemoteISOBrowseScreen::RemoteISOBrowseScreen(const std::string &url, const std::
 }
 
 void RemoteISOBrowseScreen::CreateViews() {
-	bool vertical = UseVerticalLayout();
-
 	auto di = GetI18NCategory("Dialog");
 	auto ri = GetI18NCategory("RemoteISO");
+
+	bool vertical = UseVerticalLayout();
 
 	Margins actionMenuMargins(0, 10, 10, 0);
 

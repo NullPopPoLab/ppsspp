@@ -105,13 +105,6 @@ enum IOTimingMethods {
 	IOTIMING_REALISTIC = 2,
 };
 
-enum class SmallDisplayZoom {
-	STRETCH = 0,
-	PARTIAL_STRETCH = 1,
-	AUTO = 2,
-	MANUAL = 3,
-};
-
 enum class AutoLoadSaveState {
 	OFF = 0,
 	OLDEST = 1,
@@ -129,4 +122,10 @@ enum class BackgroundAnimation {
 	RECENT_GAMES = 2,
 	WAVE = 3,
 	MOVING_BACKGROUND = 4,
+};
+
+enum class AnalogFpsMode {
+	AUTO = 0,
+	MAPPED_DIRECTION = 1,
+	MAPPED_DIR_TO_OPPOSITE_DIR = 2,
 };

@@ -23,6 +23,7 @@ namespace Math3D {
 template<>
 float Vec2<float>::Length() const
 {
+	// Doubt this is worth it for a vec2 :/
 #if defined(_M_SSE)
 	float ret;
 	__m128 xy = _mm_loadu_ps(&x);
@@ -49,8 +50,7 @@ Vec2<float> Vec2<float>::WithLength(const float l) const
 }
 
 template<>
-float Vec2<float>::Distance2To(Vec2<float> &other)
-{
+float Vec2<float>::Distance2To(const Vec2<float> &other) const {
 	return Vec2<float>(other-(*this)).Length2();
 }
 
@@ -98,8 +98,7 @@ Vec3<float> Vec3<float>::WithLength(const float l) const
 }
 
 template<>
-float Vec3<float>::Distance2To(Vec3<float> &other)
-{
+float Vec3<float>::Distance2To(const Vec3<float> &other) const {
 	return Vec3<float>(other-(*this)).Length2();
 }
 
@@ -120,7 +119,8 @@ __m128 SSENormalizeMultiplierSSE2(__m128 v)
 #endif
 __m128 SSENormalizeMultiplierSSE4(__m128 v)
 {
-	return _mm_rsqrt_ps(_mm_dp_ps(v, v, 0xFF));
+	// This is only used for Vec3f, so ignore the 4th component, might be garbage.
+	return _mm_rsqrt_ps(_mm_dp_ps(v, v, 0x77));
 }
 
 __m128 SSENormalizeMultiplier(bool useSSE4, __m128 v)
@@ -229,8 +229,7 @@ Vec3Packed<float> Vec3Packed<float>::WithLength(const float l) const
 }
 
 template<>
-float Vec3Packed<float>::Distance2To(Vec3Packed<float> &other)
-{
+float Vec3Packed<float>::Distance2To(const Vec3Packed<float> &other) const {
 	return Vec3Packed<float>(other-(*this)).Length2();
 }
 
@@ -277,8 +276,7 @@ Vec4<float> Vec4<float>::WithLength(const float l) const
 }
 
 template<>
-float Vec4<float>::Distance2To(Vec4<float> &other)
-{
+float Vec4<float>::Distance2To(const Vec4<float> &other) const {
 	return Vec4<float>(other-(*this)).Length2();
 }
 

@@ -19,7 +19,7 @@
 #endif
 #include <ctime>
 
-static double curtime = 0;
+// TODO: https://github.com/floooh/sokol/blob/9a6237fcdf213e6da48e4f9201f144bcb2dcb46f/sokol_time.h#L229-L248
 
 #ifdef _WIN32
 
@@ -31,7 +31,6 @@ double time_now_d() {
 	if (frequency.QuadPart == 0) {
 		QueryPerformanceFrequency(&frequency);
 		QueryPerformanceCounter(&startTime);
-		curtime = 0.0;
 		frequencyMult = 1.0 / static_cast<double>(frequency.QuadPart);
 	}
 	LARGE_INTEGER time;
@@ -66,22 +65,25 @@ void sleep_ms(int ms) {
 
 // Return the current time formatted as Minutes:Seconds:Milliseconds
 // in the form 00:00:000.
-void GetTimeFormatted(char formattedTime[11]) {
+void GetTimeFormatted(char formattedTime[13]) {
 	time_t sysTime;
 	time(&sysTime);
+
+	uint32_t milliseconds;
+#ifdef _WIN32
+	struct timeb tp;
+	(void)::ftime(&tp);
+	milliseconds = tp.millitm;
+#else
+	struct timeval t;
+	(void)gettimeofday(&t, NULL);
+	milliseconds = (int)(t.tv_usec / 1000);
+#endif
 
 	struct tm *gmTime = localtime(&sysTime);
 	char tmp[6];
 	strftime(tmp, sizeof(tmp), "%M:%S", gmTime);
 
 	// Now tack on the milliseconds
-#ifdef _WIN32
-	struct timeb tp;
-	(void)::ftime(&tp);
-	snprintf(formattedTime, 11, "%s:%03i", tmp, tp.millitm);
-#else
-	struct timeval t;
-	(void)gettimeofday(&t, NULL);
-	snprintf(formattedTime, 11, "%s:%03d", tmp, (int)(t.tv_usec / 1000));
-#endif
+	snprintf(formattedTime, 11, "%s:%03u", tmp, milliseconds % 1000);
 }

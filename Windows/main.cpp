@@ -34,6 +34,7 @@
 #include "Common/System/Display.h"
 #include "Common/System/NativeApp.h"
 #include "Common/System/System.h"
+#include "Common/File/FileUtil.h"
 #include "Common/File/VFS/VFS.h"
 #include "Common/File/VFS/AssetReader.h"
 #include "Common/Data/Text/I18n.h"
@@ -109,9 +110,12 @@ static std::thread inputBoxThread;
 static bool inputBoxRunning = false;
 
 void OpenDirectory(const char *path) {
-	SFGAOF flags;
+	// SHParseDisplayName can't handle relative paths, so normalize first.
+	std::string resolved = ReplaceAll(File::ResolvePath(path), "/", "\\");
+
+	SFGAOF flags{};
 	PIDLIST_ABSOLUTE pidl = nullptr;
-	HRESULT hr = SHParseDisplayName(ConvertUTF8ToWString(ReplaceAll(path, "/", "\\")).c_str(), nullptr, &pidl, 0, &flags);
+	HRESULT hr = SHParseDisplayName(ConvertUTF8ToWString(resolved).c_str(), nullptr, &pidl, 0, &flags);
 
 	if (pidl) {
 		if (SUCCEEDED(hr))
@@ -126,6 +130,11 @@ void LaunchBrowser(const char *url) {
 
 void Vibrate(int length_ms) {
 	// Ignore on PC
+}
+
+static void AddDebugRestartArgs() {
+	if (LogManager::GetInstance()->GetConsoleListener()->IsOpen())
+		restartArgs += " -l";
 }
 
 // Adapted mostly as-is from http://www.gamedev.net/topic/495075-how-to-retrieve-info-about-videocard/?view=findpost&p=4229170
@@ -165,8 +174,8 @@ std::string GetVideoCardDriverVersion() {
 	IEnumWbemClassObject* pEnum;
 	hr = pIWbemServices->ExecQuery(bstrWQL, bstrPath, WBEM_FLAG_FORWARD_ONLY, NULL, &pEnum);
 
-	ULONG uReturned;
-	VARIANT var;
+	ULONG uReturned = 0;
+	VARIANT var{};
 	IWbemClassObject* pObj = NULL;
 	if (!FAILED(hr)) {
 		hr = pEnum->Next(WBEM_INFINITE, 1, &pObj, &uReturned);
@@ -207,7 +216,7 @@ std::string System_GetProperty(SystemProperty prop) {
 				if (wstr)
 					retval = ConvertWStringToUTF8(wstr);
 				else
-					retval = "";
+					retval.clear();
 				GlobalUnlock(handle);
 				CloseClipboard();
 			}
@@ -334,6 +343,8 @@ bool System_GetPropertyBool(SystemProperty prop) {
 		return true;
 	case SYSPROP_HAS_KEYBOARD:
 		return true;
+	case SYSPROP_SUPPORTS_OPEN_FILE_IN_EDITOR:
+		return true;  // FileUtil.cpp: OpenFileInEditor
 	default:
 		return false;
 	}
@@ -346,6 +357,8 @@ void System_SendMessage(const char *command, const char *parameter) {
 		}
 	} else if (!strcmp(command, "graphics_restart")) {
 		restartArgs = parameter == nullptr ? "" : parameter;
+		if (!restartArgs.empty())
+			AddDebugRestartArgs();
 		if (IsDebuggerPresent()) {
 			PostMessage(MainWindow::GetHWND(), MainWindow::WM_USER_RESTART_EMUTHREAD, 0, 0);
 		} else {
@@ -359,16 +372,8 @@ void System_SendMessage(const char *command, const char *parameter) {
 		std::wstring title = ConvertUTF8ToWString(err->T("GenericGraphicsError", "Graphics Error"));
 		MessageBox(MainWindow::GetHWND(), full_error.c_str(), title.c_str(), MB_OK);
 	} else if (!strcmp(command, "setclipboardtext")) {
-		if (OpenClipboard(MainWindow::GetDisplayHWND())) {
-			std::wstring data = ConvertUTF8ToWString(parameter);
-			HANDLE handle = GlobalAlloc(GMEM_MOVEABLE, (data.size() + 1) * sizeof(wchar_t));
-			wchar_t *wstr = (wchar_t *)GlobalLock(handle);
-			memcpy(wstr, data.c_str(), (data.size() + 1) * sizeof(wchar_t));
-			GlobalUnlock(wstr);
-			SetClipboardData(CF_UNICODETEXT, handle);
-			GlobalFree(handle);
-			CloseClipboard();
-		}
+		std::wstring data = ConvertUTF8ToWString(parameter);
+		W32Util::CopyTextToClipboard(MainWindow::GetDisplayHWND(), data);
 	} else if (!strcmp(command, "browse_file")) {
 		MainWindow::BrowseAndBoot("");
 	} else if (!strcmp(command, "browse_folder")) {
@@ -398,6 +403,8 @@ void EnableCrashingOnCrashes() {
 	const DWORD EXCEPTION_SWALLOWING = 0x1;
 
 	HMODULE kernel32 = LoadLibrary(L"kernel32.dll");
+	if (!kernel32)
+		return;
 	tGetPolicy pGetPolicy = (tGetPolicy)GetProcAddress(kernel32,
 		"GetProcessUserModeExceptionPolicy");
 	tSetPolicy pSetPolicy = (tSetPolicy)GetProcAddress(kernel32,
@@ -426,6 +433,12 @@ void System_InputBoxGetString(const std::string &title, const std::string &defau
 			NativeInputBoxReceived(cb, false, "");
 		}
 	});
+}
+
+void System_Toast(const char *text) {
+	// Not-very-good implementation. Will normally not be used on Windows anyway.
+	std::wstring str = ConvertUTF8ToWString(text);
+	MessageBox(0, str.c_str(), L"Toast!", MB_ICONINFORMATION);
 }
 
 static std::string GetDefaultLangRegion() {
@@ -671,7 +684,7 @@ int WINAPI WinMain(HINSTANCE _hInstance, HINSTANCE hPrevInstance, LPSTR szCmdLin
 
 	if (iCmdShow == SW_MAXIMIZE) {
 		// Consider this to mean --fullscreen.
-		g_Config.bFullScreen = true;
+		g_Config.iForceFullScreen = 1;
 	}
 
 	// Consider at least the following cases before changing this code:
@@ -754,7 +767,7 @@ int WINAPI WinMain(HINSTANCE _hInstance, HINSTANCE hPrevInstance, LPSTR szCmdLin
 			break;
 		}
 
-		if (!TranslateAccelerator(wnd, accel, &msg)) {
+		if (!wnd || !accel || !TranslateAccelerator(wnd, accel, &msg)) {
 			if (!DialogManager::IsDialogMessage(&msg)) {
 				//and finally translate and dispatch
 				TranslateMessage(&msg);
@@ -762,8 +775,6 @@ int WINAPI WinMain(HINSTANCE _hInstance, HINSTANCE hPrevInstance, LPSTR szCmdLin
 			}
 		}
 	}
-
-	MainThread_Stop();
 
 	VFSShutdown();
 

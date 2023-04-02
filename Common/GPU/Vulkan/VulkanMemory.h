@@ -1,9 +1,9 @@
 #pragma once
 
 #include <cstdint>
+#include <cstring>
 #include <functional>
 #include <vector>
-#include <unordered_map>
 
 #include "Common/GPU/Vulkan/VulkanContext.h"
 
@@ -102,6 +102,10 @@ public:
 		return offset_;
 	}
 
+	const char *Name() const {
+		return name_;
+	}
+
 	// "Zero-copy" variant - you can write the data directly as you compute it.
 	// Recommended.
 	void *Push(size_t size, uint32_t *bindOffset, VkBuffer *vkbuf) {
@@ -116,6 +120,15 @@ public:
 		size_t off = Allocate(size, vkbuf);
 		*bindOffset = (uint32_t)off;
 		return writePtr_ + off;
+	}
+
+	template<class T>
+	void PushUBOData(const T &data, VkDescriptorBufferInfo *info) {
+		uint32_t bindOffset;
+		void *ptr = PushAligned(sizeof(T), &bindOffset, &info->buffer, vulkan_->GetPhysicalDeviceProperties().properties.limits.minUniformBufferOffsetAlignment);
+		memcpy(ptr, &data, sizeof(T));
+		info->offset = bindOffset;
+		info->range = sizeof(T);
 	}
 
 	size_t GetTotalSize() const;
@@ -140,8 +153,7 @@ private:
 // Only appropriate for use in a per-frame pool.
 class VulkanDescSetPool {
 public:
-	VulkanDescSetPool(const char *tag, bool grow) : tag_(tag), grow_(grow) {
-	}
+	VulkanDescSetPool(const char *tag, bool grow) : tag_(tag), grow_(grow) {}
 	~VulkanDescSetPool();
 
 	// Must call this before use: defines how to clear cache of ANY returned values from Allocate().
@@ -151,7 +163,7 @@ public:
 	void Create(VulkanContext *vulkan, const VkDescriptorPoolCreateInfo &info, const std::vector<VkDescriptorPoolSize> &sizes);
 	// Allocate a new set, which may resize and empty the current sets.
 	// Use only for the current frame, unless in a cache cleared by clear_.
-	VkDescriptorSet Allocate(int n, const VkDescriptorSetLayout *layouts);
+	VkDescriptorSet Allocate(int n, const VkDescriptorSetLayout *layouts, const char *tag);
 	void Reset();
 	void Destroy();
 

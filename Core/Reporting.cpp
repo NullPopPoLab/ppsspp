@@ -280,9 +280,11 @@ namespace Reporting
 			return false;
 
 		if (http.Resolve(serverHost, ServerPort())) {
-			http.Connect();
-			int result = http.POST(http::RequestParams(uri), data, mimeType, output, &progress);
-			http.Disconnect();
+			int result = -1;
+			if (http.Connect()) {
+				result = http.POST(http::RequestParams(uri), data, mimeType, output, &progress);
+				http.Disconnect();
+			}
 
 			return result >= 200 && result < 300;
 		} else {
@@ -388,6 +390,11 @@ namespace Reporting
 			everUnsupported = true;
 	}
 
+	void NotifyDebugger() {
+		currentSupported = false;
+		everUnsupported = true;
+	}
+
 	std::string CurrentGameID()
 	{
 		// TODO: Maybe ParamSFOData shouldn't include nulls in std::strings?  Don't work to break savedata, though...
@@ -427,7 +434,8 @@ namespace Reporting
 	void AddGameplayInfo(UrlEncoder &postdata)
 	{
 		// Just to get an idea of how long they played.
-		postdata.Add("ticks", (const uint64_t)CoreTiming::GetTicks());
+		if (PSP_IsInited())
+			postdata.Add("ticks", (const uint64_t)CoreTiming::GetTicks());
 
 		float vps, fps;
 		__DisplayGetAveragedFPS(&vps, &fps);

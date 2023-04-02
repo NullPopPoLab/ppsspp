@@ -30,8 +30,6 @@
 struct DecVtxFormat;
 struct UVScale;
 
-namespace DX9 {
-
 class VSShader;
 class ShaderManagerDX9;
 class TextureCacheDX9;
@@ -107,7 +105,7 @@ public:
 class DrawEngineDX9 : public DrawEngineCommon {
 public:
 	DrawEngineDX9(Draw::DrawContext *draw);
-	virtual ~DrawEngineDX9();
+	~DrawEngineDX9();
 
 	void SetShaderManager(ShaderManagerDX9 *shaderManager) {
 		shaderManager_ = shaderManager;
@@ -146,11 +144,11 @@ protected:
 	void DecimateTrackedVertexArrays();
 
 private:
+	void Invalidate(InvalidationCallbackFlags flags);
 	void DoFlush();
 
 	void ApplyDrawState(int prim);
 	void ApplyDrawStateLate();
-	void ResetFramebufferRead();
 
 	IDirect3DVertexDeclaration9 *SetupDecFmtForDraw(VSShader *vshader, const DecVtxFormat &decFmt, u32 pspFmt);
 
@@ -173,7 +171,9 @@ private:
 	// Hardware tessellation
 	TessellationDataTransferDX9 *tessDataTransferDX9;
 
-	int lastRenderStepId_ = -1;
-};
+	FBOTexState fboTexBindState_ = FBO_TEX_NONE;
 
-}  // namespace
+	int lastRenderStepId_ = -1;
+
+	bool fboTexNeedsBind_ = false;
+};

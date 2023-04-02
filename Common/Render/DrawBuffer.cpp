@@ -32,12 +32,6 @@ void DrawBuffer::Init(Draw::DrawContext *t3d, Draw::Pipeline *pipeline) {
 
 	draw_ = t3d;
 	inited_ = true;
-
-	if (pipeline->RequiresBuffer()) {
-		vbuf_ = draw_->CreateBuffer(MAX_VERTS * sizeof(Vertex), BufferUsageFlag::DYNAMIC | BufferUsageFlag::VERTEXDATA);
-	} else {
-		vbuf_ = nullptr;
-	}
 }
 
 Draw::InputLayout *DrawBuffer::CreateInputLayout(Draw::DrawContext *t3d) {
@@ -57,10 +51,6 @@ Draw::InputLayout *DrawBuffer::CreateInputLayout(Draw::DrawContext *t3d) {
 }
 
 void DrawBuffer::Shutdown() {
-	if (vbuf_) {
-		vbuf_->Release();
-		vbuf_ = nullptr;
-	}
 	inited_ = false;
 	alphaStack_.clear();
 	drawMatrixStack_.clear();
@@ -90,14 +80,7 @@ void DrawBuffer::Flush(bool set_blend_state) {
 	ub.tint = tint_;
 	ub.saturation = saturation_;
 	draw_->UpdateDynamicUniformBuffer(&ub, sizeof(ub));
-	if (vbuf_) {
-		draw_->UpdateBuffer(vbuf_, (const uint8_t *)verts_, 0, sizeof(Vertex) * count_, Draw::UPDATE_DISCARD);
-		draw_->BindVertexBuffers(0, 1, &vbuf_, nullptr);
-		int offset = 0;
-		draw_->Draw(count_, offset);
-	} else {
-		draw_->DrawUP((const void *)verts_, count_);
-	}
+	draw_->DrawUP((const void *)verts_, count_);
 	count_ = 0;
 }
 
@@ -147,7 +130,7 @@ void DrawBuffer::RectOutline(float x, float y, float w, float h, uint32_t color,
 	vLine(x + w, y, y + h + pixel_in_dps_y, color);
 }
 
-void DrawBuffer::MultiVGradient(float x, float y, float w, float h, GradientStop *stops, int numStops) {
+void DrawBuffer::MultiVGradient(float x, float y, float w, float h, const GradientStop *stops, int numStops) {
 	for (int i = 0; i < numStops - 1; i++) {
 		float t0 = stops[i].t, t1 = stops[i+1].t;
 		uint32_t c0 = stops[i].color, c1 = stops[i+1].color;
@@ -302,7 +285,9 @@ void DrawBuffer::DrawImageRotated(ImageID atlas_image, float x, float y, float s
 		{u1, image->v2},
 	};
 	for (int i = 0; i < 6; i++) {
-		rot(v[i], angle, x, y);
+		if (angle != 0.0f) {
+			rot(v[i], angle, x, y);
+		}
 		V(v[i][0], v[i][1], 0, color, uv[i][0], uv[i][1]);
 	}
 }

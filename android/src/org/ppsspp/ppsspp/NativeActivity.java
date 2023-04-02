@@ -381,6 +381,9 @@ public abstract class NativeActivity extends Activity {
 		}
 
 		int deviceType = NativeApp.DEVICE_TYPE_MOBILE;
+		if (isVRDevice()) {
+			deviceType = NativeApp.DEVICE_TYPE_VR;
+		}
 		UiModeManager uiModeManager = (UiModeManager) getSystemService(UI_MODE_SERVICE);
 		switch (uiModeManager.getCurrentModeType()) {
 		case Configuration.UI_MODE_TYPE_TELEVISION:
@@ -618,7 +621,7 @@ public abstract class NativeActivity extends Activity {
 		if (javaGL) {
 			mGLSurfaceView = new NativeGLView(this);
 			nativeRenderer = new NativeRenderer(this);
-			mGLSurfaceView.setEGLContextClientVersion(2);
+			mGLSurfaceView.setEGLContextClientVersion(isVRDevice() ? 3 : 2);
 			sizeManager.setSurfaceView(mGLSurfaceView);
 
 			// Setup the GLSurface and ask android for the correct
@@ -786,6 +789,11 @@ public abstract class NativeActivity extends Activity {
 			initialized = false;
 		}
 		navigationCallbackView = null;
+
+		// Workaround for VR issues when PPSSPP restarts
+		if (isVRDevice()) {
+			System.exit(0);
+		}
 	}
 
 	@Override
@@ -1227,6 +1235,12 @@ public abstract class NativeActivity extends Activity {
 
 	// The return value is sent to C++ via seqID.
 	public void inputBox(final String seqID, final String title, String defaultText, String defaultAction) {
+		// Workaround for issue #13363 to fix Split/Second game start
+		if (isVRDevice()) {
+			NativeApp.sendInputBox(seqID, false, defaultText);
+			return;
+		}
+
 		final FrameLayout fl = new FrameLayout(this);
 		final EditText input = new EditText(this);
 		input.setGravity(Gravity.CENTER);
@@ -1541,5 +1555,9 @@ public abstract class NativeActivity extends Activity {
 			startActivity(getIntent());
 			finish();
 		}
+	}
+
+	public static boolean isVRDevice() {
+		return BuildConfig.FLAVOR.startsWith("vr_");
 	}
 }

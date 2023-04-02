@@ -49,6 +49,7 @@
 #include "Core/KeyMap.h"
 #include "Core/MIPS/JitCommon/JitCommon.h"
 #include "Core/MIPS/JitCommon/JitBlockCache.h"
+#include "Core/Reporting.h"
 #include "Windows/InputBox.h"
 #include "Windows/InputDevice.h"
 #if PPSSPP_API(ANY_GL)
@@ -87,6 +88,8 @@
 int verysleepy__useSendMessage = 1;
 
 const UINT WM_VERYSLEEPY_MSG = WM_APP + 0x3117;
+const UINT WM_USER_GET_BASE_POINTER = WM_APP + 0x3118;  // 0xB118
+
 // Respond TRUE to a message with this param value to indicate support.
 const WPARAM VERYSLEEPY_WPARAM_SUPPORTED = 0;
 // Respond TRUE to a message wit this param value after filling in the addr name.
@@ -189,10 +192,10 @@ namespace MainWindow
 	}
 
 	void SavePosition() {
-		if (g_Config.bFullScreen || inFullscreenResize)
+		if (g_Config.UseFullScreen() || inFullscreenResize)
 			return;
 
-		WINDOWPLACEMENT placement;
+		WINDOWPLACEMENT placement{};
 		GetWindowPlacement(hwndMain, &placement);
 		if (placement.showCmd == SW_SHOWNORMAL) {
 			RECT rc;
@@ -235,11 +238,11 @@ namespace MainWindow
 				g_Config.iInternalResolution = 0;
 		}
 
-		NativeMessageReceived("gpu_resized", "");
+		NativeMessageReceived("gpu_renderResized", "");
 	}
 
 	void CorrectCursor() {
-		bool autoHide = ((g_Config.bFullScreen && !mouseButtonDown) || (g_Config.bMouseControl && trapMouse)) && GetUIState() == UISTATE_INGAME;
+		bool autoHide = ((g_Config.UseFullScreen() && !mouseButtonDown) || (g_Config.bMouseControl && trapMouse)) && GetUIState() == UISTATE_INGAME;
 		if (autoHide && (hideCursor || g_Config.bMouseControl)) {
 			while (cursorCounter >= 0) {
 				cursorCounter = ShowCursor(FALSE);
@@ -299,11 +302,12 @@ namespace MainWindow
 		DEBUG_LOG(SYSTEM, "Pixel width/height: %dx%d", PSP_CoreParameter().pixelWidth, PSP_CoreParameter().pixelHeight);
 
 		if (UpdateScreenScale(width, height)) {
-			NativeMessageReceived("gpu_resized", "");
+			NativeMessageReceived("gpu_displayResized", "");
+			NativeMessageReceived("gpu_renderResized", "");
 		}
 
 		// Don't save the window state if fullscreen.
-		if (!g_Config.bFullScreen) {
+		if (!g_Config.UseFullScreen()) {
 			g_WindowState = newSizingType;
 		}
 	}
@@ -331,9 +335,6 @@ namespace MainWindow
 			dwStyle &= ~WS_POPUP;
 			// Re-add caption and border styles.
 			dwStyle |= WS_OVERLAPPEDWINDOW;
-
-			// Put back the menu bar.
-			::SetMenu(hWnd, menu);
 		} else {
 			// If the window was maximized before going fullscreen, make sure to restore first
 			// in order not to have the taskbar show up on top of PPSSPP.
@@ -350,10 +351,13 @@ namespace MainWindow
 
 		::SetWindowLong(hWnd, GWL_STYLE, dwStyle);
 
-		// Remove the menu bar. This can trigger WM_SIZE
-		::SetMenu(hWnd, goingFullscreen ? NULL : menu);
+		// Remove the menu bar. This can trigger WM_SIZE because the contents change size.
+		::SetMenu(hWnd, goingFullscreen || !g_Config.bShowMenuBar ? NULL : menu);
 
-		g_Config.bFullScreen = goingFullscreen;
+		if (g_Config.UseFullScreen() != goingFullscreen) {
+			g_Config.bFullScreen = goingFullscreen;
+			g_Config.iForceFullScreen = -1;
+		}
 		g_isFullscreen = goingFullscreen;
 
 		g_IgnoreWM_SIZE = false;
@@ -414,7 +418,7 @@ namespace MainWindow
 		bool resetPositionX = true;
 		bool resetPositionY = true;
 
-		if (g_Config.iWindowWidth > 0 && g_Config.iWindowHeight > 0 && !g_Config.bFullScreen) {
+		if (g_Config.iWindowWidth > 0 && g_Config.iWindowHeight > 0 && !g_Config.UseFullScreen()) {
 			bool visibleHorizontally = ((g_Config.iWindowX + g_Config.iWindowWidth) >= virtualScreenX) &&
 				((g_Config.iWindowX + g_Config.iWindowWidth) < (virtualScreenWidth + g_Config.iWindowWidth));
 
@@ -522,7 +526,7 @@ namespace MainWindow
 		hideCursor = true;
 		SetTimer(hwndMain, TIMER_CURSORUPDATE, CURSORUPDATE_INTERVAL_MS, 0);
 
-		ToggleFullscreen(hwndMain, g_Config.bFullScreen);
+		ToggleFullscreen(hwndMain, g_Config.UseFullScreen());
 
 		W32Util::MakeTopMost(hwndMain, g_Config.bTopMost);
 
@@ -654,7 +658,7 @@ namespace MainWindow
 				double now = time_now_d();
 				if ((now - lastMouseDown) < 0.001 * GetDoubleClickTime()) {
 					if (!g_Config.bShowTouchControls && !g_Config.bMouseControl && GetUIState() == UISTATE_INGAME && g_Config.bFullscreenOnDoubleclick) {
-						SendToggleFullscreen(!g_Config.bFullScreen);
+						SendToggleFullscreen(!g_Config.UseFullScreen());
 					}
 					lastMouseDown = 0.0;
 				} else {
@@ -730,6 +734,18 @@ namespace MainWindow
 			if (!DoesVersionMatchWindows(6, 0, 0, 0, true)) {
 				// Remove the D3D11 choice on versions below XP
 				RemoveMenu(GetMenu(hWnd), ID_OPTIONS_DIRECT3D11, MF_BYCOMMAND);
+			}
+			break;
+
+		case WM_USER_GET_BASE_POINTER:
+			Reporting::NotifyDebugger();
+			switch (lParam) {
+			case 0:
+				return (u32)(u64)Memory::base;
+			case 1:
+				return (u32)((u64)Memory::base >> 32);
+			default:
+				return 0;
 			}
 			break;
 
@@ -952,6 +968,7 @@ namespace MainWindow
 			break;
 
 		case WM_CLOSE:
+			MainThread_Stop();
 			InputDevice::StopPolling();
 			WindowsRawInput::Shutdown();
 			return DefWindowProc(hWnd,message,wParam,lParam);
@@ -960,8 +977,9 @@ namespace MainWindow
 			KillTimer(hWnd, TIMER_CURSORUPDATE);
 			KillTimer(hWnd, TIMER_CURSORMOVEUPDATE);
 			KillTimer(hWnd, TIMER_WHEELRELEASE);
+			// Main window is gone, this tells the message loop to exit.
 			PostQuitMessage(0);
-			break;
+			return 0;
 
 		case WM_USER + 1:
 			NotifyDebuggerMapLoaded();

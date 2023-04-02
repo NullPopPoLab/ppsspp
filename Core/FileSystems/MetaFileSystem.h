@@ -91,7 +91,7 @@ public:
 	int MapFilePath(const std::string &inpath, std::string &outpath, MountPoint **system);
 
 	inline int MapFilePath(const std::string &_inpath, std::string &outpath, IFileSystem **system) {
-		MountPoint *mountPoint;
+		MountPoint *mountPoint = nullptr;
 		int error = MapFilePath(_inpath, outpath, &mountPoint);
 		if (error == 0) {
 			*system = mountPoint->system.get();
@@ -103,7 +103,7 @@ public:
 
 	std::string NormalizePrefix(std::string prefix) const;
 
-	std::vector<PSPFileInfo> GetDirListing(std::string path) override;
+	std::vector<PSPFileInfo> GetDirListing(const std::string &path, bool *exists = nullptr) override;
 	int      OpenFile(std::string filename, FileAccess access, const char *devicename = nullptr) override;
 	void     CloseFile(u32 handle) override;
 	size_t   ReadFile(u32 handle, u8 *pointer, s64 size) override;

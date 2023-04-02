@@ -21,8 +21,8 @@
 #include "GPU/GPUInterface.h"
 #include "GPU/GPUState.h"
 #include "Common/GPU/Vulkan/VulkanContext.h"
-#include "GPU/Vulkan/TextureScalerVulkan.h"
 #include "GPU/Common/TextureCacheCommon.h"
+#include "GPU/Common/TextureShaderCommon.h"
 #include "GPU/Vulkan/VulkanUtil.h"
 
 struct VirtualFramebuffer;
@@ -52,30 +52,21 @@ private:
 	DenseHashMap<SamplerCacheKey, VkSampler, (VkSampler)VK_NULL_HANDLE> cache_;
 };
 
-class Vulkan2D;
-
 class TextureCacheVulkan : public TextureCacheCommon {
 public:
-	TextureCacheVulkan(Draw::DrawContext *draw, VulkanContext *vulkan);
+	TextureCacheVulkan(Draw::DrawContext *draw, Draw2D *draw2D, VulkanContext *vulkan);
 	~TextureCacheVulkan();
 
-	void StartFrame();
+	void StartFrame() override;
 	void EndFrame();
 
 	void DeviceLost();
 	void DeviceRestore(Draw::DrawContext *draw);
 
 	void SetFramebufferManager(FramebufferManagerVulkan *fbManager);
-	void SetDepalShaderCache(DepalShaderCacheVulkan *dpCache) {
-		depalShaderCache_ = dpCache;
-	}
-	void SetShaderManager(ShaderManagerVulkan *sm) {
-		shaderManagerVulkan_ = sm;
-	}
 	void SetDrawEngine(DrawEngineVulkan *td) {
 		drawEngine_ = td;
 	}
-	void SetVulkan2D(Vulkan2D *vk2d);
 	void SetPushBuffer(VulkanPushBuffer *push) {
 		push_ = push;
 	}
@@ -90,7 +81,7 @@ public:
 		sampler = curSampler_;
 	}
 
-	bool GetCurrentTextureDebug(GPUDebugBuffer &buffer, int level) override;
+	bool GetCurrentTextureDebug(GPUDebugBuffer &buffer, int level, bool *isFramebuffer) override;
 
 	void GetStats(char *ptr, size_t size);
 
@@ -103,14 +94,16 @@ protected:
 	void BindTexture(TexCacheEntry *entry) override;
 	void Unbind() override;
 	void ReleaseTexture(TexCacheEntry *entry, bool delete_them) override;
+	void BindAsClutTexture(Draw::Texture *tex, bool smooth) override;
+	void ApplySamplingParams(const SamplerCacheKey &key) override;
+	void BoundFramebufferTexture() override;
+	void *GetNativeTextureView(const TexCacheEntry *entry) override;
 
 private:
-	void LoadTextureLevel(TexCacheEntry &entry, uint8_t *writePtr, int rowPitch,  int level, int scaleFactor, VkFormat dstFmt);
+	void LoadVulkanTextureLevel(TexCacheEntry &entry, uint8_t *writePtr, int rowPitch,  int level, int scaleFactor, VkFormat dstFmt);
 	VkFormat GetDestFormat(GETextureFormat format, GEPaletteFormat clutFormat) const;
-	static TexCacheEntry::TexStatus CheckAlpha(const u32 *pixelData, VkFormat dstFmt, int stride, int w, int h);
 	void UpdateCurrentClut(GEPaletteFormat clutFormat, u32 clutBase, bool clutIndexIsSimple) override;
 
-	void ApplyTextureFramebuffer(VirtualFramebuffer *framebuffer, GETextureFormat texFormat, FramebufferNotificationChannel channel) override;
 	void BuildTexture(TexCacheEntry *const entry) override;
 
 	void CompileScalingShader();
@@ -122,15 +115,9 @@ private:
 
 	SamplerCache samplerCache_;
 
-	TextureScalerVulkan scaler;
-
-	DepalShaderCacheVulkan *depalShaderCache_;
-	ShaderManagerVulkan *shaderManagerVulkan_;
 	DrawEngineVulkan *drawEngine_;
-	Vulkan2D *vulkan2D_;
 
 	std::string textureShader_;
-	int shaderScaleFactor_ = 0;
 	VkShaderModule uploadCS_ = VK_NULL_HANDLE;
 
 	// Bound state to emulate an API similar to the others

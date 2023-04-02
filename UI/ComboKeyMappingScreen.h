@@ -24,9 +24,11 @@ namespace UI {
 	class CheckBox;
 }
 
-class ComboKeyScreen : public UIDialogScreenWithBackground {
+class ComboKeyScreen : public UIDialogScreenWithGameBackground {
 public:
-	ComboKeyScreen(int id): id_(id) {}
+	ComboKeyScreen(const Path &gamePath, int id) : UIDialogScreenWithGameBackground(gamePath), id_(id) {}
+
+	const char *tag() const override { return "ComboKey"; }
 
 	void CreateViews() override;
 	void onFinish(DialogResult result) override;
@@ -39,7 +41,6 @@ private:
 
 	bool array[ARRAY_SIZE(CustomKey::comboKeyList)];
 	int id_;
-	UI::ChoiceStrip *comboselect;
 	UI::ScrollView *rightScroll_;
 	class ChoiceEventHandler{
 	public:

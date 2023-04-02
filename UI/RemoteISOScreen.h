@@ -29,6 +29,8 @@ class RemoteISOScreen : public UIScreenWithBackground {
 public:
 	RemoteISOScreen();
 
+	const char *tag() const override { return "RemoteISO"; }
+
 protected:
 	void update() override;
 	void CreateViews() override;
@@ -55,7 +57,9 @@ enum class ScanStatus {
 class RemoteISOConnectScreen : public UIScreenWithBackground {
 public:
 	RemoteISOConnectScreen();
-	~RemoteISOConnectScreen() override;
+	~RemoteISOConnectScreen();
+
+	const char *tag() const override { return "RemoteISOConnect"; }
 
 protected:
 	void update() override;
@@ -83,6 +87,8 @@ class RemoteISOBrowseScreen : public MainScreen {
 public:
 	RemoteISOBrowseScreen(const std::string &url, const std::vector<Path> &games);
 
+	const char *tag() const override { return "RemoteISOBrowse"; }
+
 protected:
 	void CreateViews() override;
 
@@ -93,6 +99,8 @@ protected:
 class RemoteISOSettingsScreen : public UIDialogScreenWithBackground {
 public:
 	RemoteISOSettingsScreen();
+
+	const char *tag() const override { return "RemoteISOSettings"; }
 
 	UI::EventReturn OnClickRemoteISOSubdir(UI::EventParams &e);
 	UI::EventReturn OnClickRemoteServer(UI::EventParams &e);

@@ -44,7 +44,9 @@ android {
 			}
 		}
 	}
-	compileSdkVersion 31
+	compileSdkVersion 32
+	ndkVersion "21.4.7075529"
+
 	defaultConfig {
 		applicationId 'org.ppsspp.ppsspp'
 		if (androidGitVersion.name() != "unknown" && androidGitVersion.code() >= 14000000) {
@@ -60,13 +62,10 @@ android {
 		new File("versioncode.txt").write(androidGitVersion.code().toString())
 
 		minSdkVersion 9
-		targetSdkVersion 31
+		targetSdkVersion 32
 		if (project.hasProperty("ANDROID_VERSION_CODE") && project.hasProperty("ANDROID_VERSION_NAME")) {
 			versionCode ANDROID_VERSION_CODE
 			versionName ANDROID_VERSION_NAME
-		}
-		ndk {
-			abiFilters 'armeabi-v7a', 'arm64-v8a', 'x86', 'x86_64'
 		}
 		signingConfig signingConfigs.debug
 	}
@@ -106,6 +105,12 @@ android {
 		gold {
 			res.srcDirs = ['gold/res']
 		}
+		vr_pico {
+			manifest.srcFile 'PicoManifest.xml'
+		}
+		vr_quest {
+			manifest.srcFile 'QuestManifest.xml'
+		}
 	}
 	productFlavors {
 		normal {
@@ -121,6 +126,9 @@ android {
 							'-DANDROID_STL=c++_static',
 							'-DANDROID_ARM_NEON=TRUE'
 				}
+			}
+			ndk {
+				abiFilters 'armeabi-v7a', 'arm64-v8a', 'x86', 'x86_64'
 			}
 		}
 		gold {
@@ -138,6 +146,49 @@ android {
 							'-DGOLD=TRUE'
 				}
 			}
+			ndk {
+				abiFilters 'armeabi-v7a', 'arm64-v8a', 'x86', 'x86_64'
+			}
+		}
+		vr_pico {
+			applicationId 'org.ppsspp.ppssppvr'
+			dimension "variant"
+			externalNativeBuild {
+				cmake {
+					// Available arguments listed at https://developer.android.com/ndk/guides/cmake.html
+					arguments '-DANDROID=true',
+							'-DANDROID_PLATFORM=android-16',
+							'-DANDROID_TOOLCHAIN=clang',
+							'-DANDROID_CPP_FEATURES=',
+							'-DANDROID_STL=c++_static',
+							'-DANDROID_ARM_NEON=TRUE',
+							'-DOPENXR_PLATFORM_PICO=TRUE',
+							'-DOPENXR=TRUE'
+				}
+			}
+			ndk {
+				abiFilters 'arm64-v8a'
+			}
+		}
+		vr_quest {
+			applicationId 'org.ppsspp.ppssppvr'
+			dimension "variant"
+			externalNativeBuild {
+				cmake {
+					// Available arguments listed at https://developer.android.com/ndk/guides/cmake.html
+					arguments '-DANDROID=true',
+							'-DANDROID_PLATFORM=android-16',
+							'-DANDROID_TOOLCHAIN=clang',
+							'-DANDROID_CPP_FEATURES=',
+							'-DANDROID_STL=c++_static',
+							'-DANDROID_ARM_NEON=TRUE',
+							'-DOPENXR_PLATFORM_QUEST=TRUE',
+							'-DOPENXR=TRUE'
+				}
+			}
+			ndk {
+				abiFilters 'arm64-v8a'
+			}
 		}
 	}
 	variantFilter { variant ->
@@ -145,7 +196,13 @@ android {
 			'normalDebug',		// for debugging
 			'normalOptimized',	// for testing
 			'normalRelease',	// for Google Play releases
-			'goldRelease'		// for Google Play releases
+			'goldRelease',		// for Google Play releases
+			'vr_picoDebug',    	// for VR debugging on Pico
+			'vr_picoOptimized',	// for VR testing on Pico
+			'vr_picoRelease',  	// for VR releases on Pico
+			'vr_questDebug',    // for VR debugging on Quest
+			'vr_questOptimized',// for VR testing on Quest
+			'vr_questRelease',  // for VR releases on Quest
 		]
 		variant.setIgnore(!needed)
 	}

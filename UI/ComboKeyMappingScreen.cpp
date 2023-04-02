@@ -56,6 +56,8 @@ public:
 		parent->Add(scroll);
 	}
 
+	const char *tag() const override { return "ButtonShape"; }
+
 private:
 	int *setting_;
 };
@@ -83,6 +85,8 @@ public:
 		scroll->Add(items);
 		parent->Add(scroll);
 	}
+
+	const char *tag() const override { return "ButtonIcon"; }
 
 private:
 	int *setting_;
@@ -235,6 +239,7 @@ void ComboKeyScreen::CreateViews() {
 
 	vertLayout->Add(new ItemHeader(co->T("Button Binding")));
 	vertLayout->Add(new CheckBox(&(cfg->toggle), co->T("Toggle mode")));
+	vertLayout->Add(new CheckBox(&(cfg->repeat), co->T("Repeat mode")));
 
 	const int cellSize = 400;
 	UI::GridLayoutSettings gridsettings(cellSize, 64, 5);
@@ -266,7 +271,7 @@ void ComboKeyScreen::CreateViews() {
 	}
 }
 
-static uint64_t arrayToInt(bool ary[ARRAY_SIZE(CustomKey::comboKeyList)]) {
+static uint64_t arrayToInt(const bool ary[ARRAY_SIZE(CustomKey::comboKeyList)]) {
 	uint64_t value = 0;
 	for (int i = ARRAY_SIZE(CustomKey::comboKeyList)-1; i >= 0; i--) {
 		value |= ary[i] ? 1 : 0;

@@ -48,6 +48,7 @@
 #include "Core/ConfigValues.h"
 #include "Core/HW/Camera.h"
 
+#include <signal.h>
 #include <string.h>
 
 MainUI *emugl = nullptr;
@@ -235,6 +236,8 @@ bool System_GetPropertyBool(SystemProperty prop) {
 	case SYSPROP_HAS_FILE_BROWSER:
 	case SYSPROP_HAS_FOLDER_BROWSER:
 		return true;
+	case SYSPROP_SUPPORTS_OPEN_FILE_IN_EDITOR:
+		return true;  // FileUtil.cpp: OpenFileInEditor
 	case SYSPROP_APP_GOLD:
 #ifdef GOLD
 		return true;
@@ -277,6 +280,7 @@ void System_SendMessage(const char *command, const char *parameter) {
 #endif
 	}
 }
+void System_Toast(const char *text) {}
 
 void System_AskForPermission(SystemPermission permission) {}
 PermissionStatus System_GetPermissionStatus(SystemPermission permission) { return PERMISSION_STATUS_GRANTED; }
@@ -414,7 +418,7 @@ QString MainUI::InputBoxGetQString(QString title, QString defaultValue) {
 
 void MainUI::resizeGL(int w, int h) {
 	if (UpdateScreenScale(w, h)) {
-		NativeMessageReceived("gpu_resized", "");
+		NativeMessageReceived("gpu_displayResized", "");
 	}
 	xscale = w / this->width();
 	yscale = h / this->height();
@@ -708,6 +712,11 @@ int main(int argc, char *argv[])
 			printf("%s\n", PPSSPP_GIT_VERSION);
 			return 0;
 		}
+	}
+
+	// Ignore sigpipe.
+	if (signal(SIGPIPE, SIG_IGN) == SIG_ERR) {
+		perror("Unable to ignore SIGPIPE");
 	}
 
 	PROFILE_INIT();

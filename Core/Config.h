@@ -29,6 +29,8 @@
 
 extern const char *PPSSPP_GIT_VERSION;
 
+extern bool jitForcedOff;
+
 enum ChatPositions {
 	BOTTOM_LEFT = 0,
 	BOTTOM_CENTER = 1,
@@ -46,6 +48,7 @@ namespace http {
 }
 
 struct UrlEncoder;
+struct ConfigPrivate;
 
 struct ConfigTouchPos {
 	float x;
@@ -60,6 +63,7 @@ struct ConfigCustomButton {
 	int image;
 	int shape;
 	bool toggle;
+	bool repeat;
 };
 
 struct Config {
@@ -137,9 +141,10 @@ public:
 	int iInternalScreenRotation;  // The internal screen rotation angle. Useful for vertical SHMUPs and similar.
 
 	std::string sReportHost;
-	std::vector<std::string> recentIsos;
 	std::vector<std::string> vPinnedPaths;
 	std::string sLanguageIni;
+
+	std::string sIgnoreCompatSettings;
 
 	bool bDiscordPresence;  // Enables setting the Discord presence to the current game (or menu)
 
@@ -157,20 +162,27 @@ public:
 	bool bSoftwareRendering;
 	bool bSoftwareRenderingJit;
 	bool bHardwareTransform; // only used in the GLES backend
-	bool bSoftwareSkinning;  // may speed up some games
+	bool bSoftwareSkinning;
 	bool bVendorBugChecksEnabled;
+	bool bUseGeometryShader;
 
-	int iRenderingMode; // 0 = non-buffered rendering 1 = buffered rendering
+	// Speedhacks (more will be moved here):
+	bool bSkipBufferEffects;
+
 	int iTexFiltering; // 1 = auto , 2 = nearest , 3 = linear , 4 = auto max quality
 	int iBufFilter; // 1 = linear, 2 = nearest
-	int iSmallDisplayZoomType;  // Used to fit display into screen 0 = stretch, 1 = partial stretch, 2 = auto scaling, 3 = manual scaling.
-	float fSmallDisplayOffsetX; // Along with Y it goes from 0.0 to 1.0, XY (0.5, 0.5) = center of the screen
-	float fSmallDisplayOffsetY;
-	float fSmallDisplayZoomLevel; //This is used for zoom values, both in and out.
-	bool bImmersiveMode;  // Mode on Android Kitkat 4.4 that hides the back button etc.
+
+	bool bDisplayStretch;  // Automatically matches the aspect ratio of the window.
+	float fDisplayOffsetX;
+	float fDisplayOffsetY;
+	float fDisplayScale;   // Relative to the most constraining axis (x or y).
+	float fDisplayAspectRatio;  // Stored relative to the PSP's native ratio, so 1.0 is the normal pixel aspect ratio.
+
+	bool bImmersiveMode;  // Mode on Android Kitkat 4.4 and later that hides the back button etc.
 	bool bSustainedPerformanceMode;  // Android: Slows clocks down to avoid overheating/speed fluctuations.
 	bool bIgnoreScreenInsets;  // Android: Center screen disregarding insets if this is enabled.
 	bool bVSync;
+
 	int iFrameSkip;
 	int iFrameSkipType;
 	int iFastForwardMode; // See FastForwardMode in ConfigValues.h.
@@ -185,18 +197,20 @@ public:
 	int iWindowY;
 	int iWindowWidth;  // Windows and other windowed environments
 	int iWindowHeight;
+	bool bShowMenuBar;  // Windows-only
 
 	float fUITint;
 	float fUISaturation;
 
 	bool bVertexCache;
 	bool bTextureBackoffCache;
-	bool bTextureSecondaryCache;
 	bool bVertexDecoderJit;
 	bool bFullScreen;
 	bool bFullScreenMulti;
+	int iForceFullScreen = -1; // -1 = nope, 0 = force off, 1 = force on (not saved.)
 	int iInternalResolution;  // 0 = Auto (native), 1 = 1x (480x272), 2 = 2x, 3 = 3x, 4 = 4x and so on.
 	int iAnisotropyLevel;  // 0 - 5, powers of 2: 0 = 1x = no aniso
+	int iMultiSampleLevel;
 	int bHighQualityDepth;
 	bool bReplaceTextures;
 	bool bSaveNewTextures;
@@ -208,6 +222,8 @@ public:
 	bool bTexHardwareScaling;
 	int iFpsLimit1;
 	int iFpsLimit2;
+	int iAnalogFpsLimit;
+	int iAnalogFpsMode; // 0 = auto, 1 = single direction, 2 = mapped to opposite
 	int iMaxRecent;
 	int iCurrentStateSlot;
 	int iRewindFlipFrequency;
@@ -223,19 +239,22 @@ public:
 	float fCwCheatScrollPosition;
 	float fGameListScrollPosition;
 	int iBloomHack; //0 = off, 1 = safe, 2 = balanced, 3 = aggressive
-	bool bBlockTransferGPU;
-	bool bDisableSlowFramebufEffects;
-	bool bFragmentTestCache;
+	bool bSkipGPUReadbacks;
 	int iSplineBezierQuality; // 0 = low , 1 = Intermediate , 2 = High
 	bool bHardwareTessellation;
 	bool bShaderCache;  // Hidden ini-only setting, useful for debugging shader compile times.
 
 	std::vector<std::string> vPostShaderNames; // Off for chain end (only Off for no shader)
 	std::map<std::string, float> mPostShaderSetting;
+
+	// Note that this is separate from VR stereo, though it'll share some code paths.
+	bool bStereoRendering;
+	// There can only be one, unlike regular post shaders.
+	std::string sStereoToMonoShader;
+
 	bool bShaderChainRequires60FPS;
 	std::string sTextureShaderName;
 	bool bGfxDebugOutput;
-	bool bGfxDebugSplitSubmit;
 	int iInflightFrames;
 	bool bRenderDuplicateFrames;
 
@@ -257,6 +276,7 @@ public:
 	float fGameGridScale;
 	bool bShowOnScreenMessages;
 	int iBackgroundAnimation;  // enum BackgroundAnimation
+	bool bTransparentBackground;
 
 	std::string sThemeName;
 
@@ -445,6 +465,20 @@ public:
 	int iFirmwareVersion;
 	bool bBypassOSKWithKeyboard;
 
+	// Virtual reality
+	bool bEnableVR;
+	bool bEnable6DoF;
+	bool bEnableStereo;
+	bool bEnableMotions;
+	bool bForce72Hz;
+	float fCameraDistance;
+	float fCameraHeight;
+	float fCameraSide;
+	float fCanvasDistance;
+	float fFieldOfViewPercentage;
+	float fHeadUpDisplayScale;
+	float fMotionLength;
+
 	// Debugger
 	int iDisasmWindowX;
 	int iDisasmWindowY;
@@ -454,6 +488,9 @@ public:
 	int iGEWindowY;
 	int iGEWindowW;
 	int iGEWindowH;
+	uint32_t uGETabsLeft;
+	uint32_t uGETabsRight;
+	uint32_t uGETabsTopRight;
 	int iConsoleWindowX;
 	int iConsoleWindowY;
 	int iFontWidth;
@@ -522,19 +559,38 @@ public:
 	int NextValidBackend();
 	bool IsBackendEnabled(GPUBackend backend, bool validate = true);
 
+	bool UseFullScreen() const {
+		if (iForceFullScreen != -1)
+			return iForceFullScreen == 1;
+		return bFullScreen;
+	}
+
+	std::vector<std::string> RecentIsos() const;
+	bool HasRecentIsos() const;
+	void ClearRecentIsos();
+
+	const std::map<std::string, std::pair<std::string, int>> &GetLangValuesMapping();
+
 protected:
 	void LoadStandardControllerIni();
+	void LoadLangValuesMapping();
+
+	void PostLoadCleanup(bool gameSpecific);
+	void PreSaveCleanup(bool gameSpecific);
+	void PostSaveCleanup(bool gameSpecific);
 
 private:
 	bool reload_ = false;
 	std::string gameId_;
 	std::string gameIdTitle_;
+	std::vector<std::string> recentIsos;
+	std::map<std::string, std::pair<std::string, int>> langValuesMapping_;
 	Path iniFilename_;
 	Path controllerIniFilename_;
 	Path searchPath_;
+	ConfigPrivate *private_ = nullptr;
 };
 
-std::map<std::string, std::pair<std::string, int>> GetLangValuesMapping();
 std::string CreateRandMAC();
 
 // TODO: Find a better place for this.

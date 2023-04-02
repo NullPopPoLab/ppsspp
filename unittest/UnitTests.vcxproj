@@ -382,6 +382,8 @@
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">true</ExcludedFromBuild>
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|ARM'">true</ExcludedFromBuild>
     </ClCompile>
+    <ClCompile Include="TestIRPassSimplify.cpp" />
+    <ClCompile Include="TestRiscVEmitter.cpp" />
     <ClCompile Include="TestShaderGenerators.cpp" />
     <ClCompile Include="TestSoftwareGPUJit.cpp" />
     <ClCompile Include="TestThreadManager.cpp" />

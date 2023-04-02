@@ -312,7 +312,7 @@ void Reinit() {
 }
 
 static void DoMemoryVoid(PointerWrap &p, uint32_t start, uint32_t size) {
-	uint8_t *d = GetPointer(start);
+	uint8_t *d = GetPointerWrite(start);
 	uint8_t *&storage = *p.ptr;
 
 	// We only handle aligned data and sizes.
@@ -334,6 +334,8 @@ static void DoMemoryVoid(PointerWrap &p, uint32_t start, uint32_t size) {
 			for (int i = l; i < h; i++)
 				_dbg_assert_msg_(d[i] == storage[i], "Savestate verification failure: %d (0x%X) (at %p) != %d (0x%X) (at %p).\n", d[i], d[i], &d[i], storage[i], storage[i], &storage[i]);
 		}, 0, size, 128);
+		break;
+	case PointerWrap::MODE_NOOP:
 		break;
 	}
 	storage += size;
@@ -479,7 +481,7 @@ void Write_Opcode_JIT(const u32 _Address, const Opcode& _Value)
 
 void Memset(const u32 _Address, const u8 _iValue, const u32 _iLength, const char *tag) {
 	if (IsValidRange(_Address, _iLength)) {
-		uint8_t *ptr = GetPointerUnchecked(_Address);
+		uint8_t *ptr = GetPointerWriteUnchecked(_Address);
 		memset(ptr, _iValue, _iLength);
 	} else {
 		for (size_t i = 0; i < _iLength; i++)
@@ -490,3 +492,12 @@ void Memset(const u32 _Address, const u8 _iValue, const u32 _iLength, const char
 }
 
 } // namespace
+
+void PSPPointerNotifyRW(int rw, uint32_t ptr, uint32_t bytes, const char * tag, size_t tagLen) {
+	if (MemBlockInfoDetailed(bytes)) {
+		if (rw & 1)
+			NotifyMemInfo(MemBlockFlags::WRITE, ptr, bytes, tag, tagLen);
+		if (rw & 2)
+			NotifyMemInfo(MemBlockFlags::READ, ptr, bytes, tag, tagLen);
+	}
+}

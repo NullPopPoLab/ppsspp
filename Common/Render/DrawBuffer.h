@@ -88,7 +88,7 @@ public:
 		RectVGradient(x, y, w, h, colorTop, darkenColor(colorTop));
 	}
 
-	void MultiVGradient(float x, float y, float w, float h, GradientStop *stops, int numStops);
+	void MultiVGradient(float x, float y, float w, float h, const GradientStop *stops, int numStops);
 
 	void RectCenter(float x, float y, float w, float h, uint32_t color) {
 		Rect(x - w/2, y - h/2, w, h, color);
@@ -199,7 +199,6 @@ private:
 	std::vector<float> alphaStack_;
 
 	Draw::DrawContext *draw_ = nullptr;
-	Draw::Buffer *vbuf_ = nullptr;
 	Draw::Pipeline *pipeline_ = nullptr;
 
 	Vertex *verts_;

@@ -10,9 +10,9 @@
 #include "Common/UI/Context.h"
 #include "Common/Render/DrawBuffer.h"
 #include "Common/Render/Text/draw_text.h"
-
+#include "Common/Render/ManagedTexture.h"
 #include "Common/Log.h"
-#include "UI/TextureUtil.h"
+#include "Common/LogReporting.h"
 
 UIContext::UIContext() {
 	fontStyle_ = new UI::FontStyle();
@@ -36,10 +36,15 @@ void UIContext::Init(Draw::DrawContext *thin3d, Draw::Pipeline *uipipe, Draw::Pi
 	textDrawer_ = TextDrawer::Create(thin3d);  // May return nullptr if no implementation is available for this platform.
 }
 
+void UIContext::setUIAtlas(const std::string &name) {
+	_dbg_assert_(!name.empty());
+	UIAtlas_ = name;
+}
+
 void UIContext::BeginFrame() {
-	if (!uitexture_) {
-		uitexture_ = CreateTextureFromFile(draw_, "ui_atlas.zim", ImageFileType::ZIM, false);
-		_dbg_assert_msg_(uitexture_, "Failed to load ui_atlas.zim.\n\nPlace it in the directory \"assets\" under your PPSSPP directory.");
+	if (!uitexture_ || UIAtlas_ != lastUIAtlas_) {
+		uitexture_ = CreateTextureFromFile(draw_, UIAtlas_.c_str(), ImageFileType::ZIM, false);
+		lastUIAtlas_ = UIAtlas_;
 		if (!fontTexture_) {
 #if PPSSPP_PLATFORM(WINDOWS) || PPSSPP_PLATFORM(ANDROID)
 			// Don't bother with loading font_atlas.zim
@@ -163,6 +168,14 @@ void UIContext::ActivateTopScissor() {
 		int y = floorf(scale_y * bounds.y);
 		int w = std::max(0.0f, ceilf(scale_x * bounds.w));
 		int h = std::max(0.0f, ceilf(scale_y * bounds.h));
+		if (x < 0 || y < 0 || x + w > pixel_xres || y + h > pixel_yres) {
+			// This won't actually report outside a game, but we can try.
+			ERROR_LOG_REPORT(G3D, "UI scissor out of bounds in %sScreen: %d,%d-%d,%d / %d,%d", screenTag_ ? screenTag_ : "N/A", x, y, w, h, pixel_xres, pixel_yres);
+			x = std::max(0, x);
+			y = std::max(0, y);
+			w = std::min(w, pixel_xres - x);
+			h = std::min(h, pixel_yres - y);
+		}
 		draw_->SetScissorRect(x, y, w, h);
 	} else {
 		// Avoid rounding errors

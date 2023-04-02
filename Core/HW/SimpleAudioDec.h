@@ -45,7 +45,7 @@ public:
 	SimpleAudio(int audioType, int sample_rate = 44100, int channels = 2);
 	~SimpleAudio();
 
-	bool Decode(void* inbuf, int inbytes, uint8_t *outbuf, int *outbytes);
+	bool Decode(const uint8_t* inbuf, int inbytes, uint8_t *outbuf, int *outbytes);
 	bool IsOK() const;
 
 	int GetOutSamples();
@@ -53,7 +53,7 @@ public:
 	int GetAudioCodecID(int audioType); // Get audioCodecId from audioType
 
 	// Not save stated, only used by UI.  Used for ATRAC3 (non+) files.
-	void SetExtraData(u8 *data, int size, int wav_bytes_per_packet);
+	void SetExtraData(const u8 *data, int size, int wav_bytes_per_packet);
 
 	void SetChannels(int channels);
 

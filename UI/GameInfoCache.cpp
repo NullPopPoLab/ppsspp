@@ -29,6 +29,7 @@
 #include "Common/File/Path.h"
 #include "Common/StringUtils.h"
 #include "Common/TimeUtil.h"
+#include "Common/Render/ManagedTexture.h"
 #include "Core/FileSystems/ISOFileSystem.h"
 #include "Core/FileSystems/DirectoryFileSystem.h"
 #include "Core/FileSystems/VirtualDiscFileSystem.h"
@@ -39,7 +40,6 @@
 #include "Core/Util/GameManager.h"
 #include "Core/Config.h"
 #include "UI/GameInfoCache.h"
-#include "UI/TextureUtil.h"
 
 GameInfoCache *g_gameInfoCache;
 
@@ -83,6 +83,7 @@ bool GameInfo::Delete() {
 	case IdentifiedFileType::PSP_ELF:
 	case IdentifiedFileType::UNKNOWN_BIN:
 	case IdentifiedFileType::UNKNOWN_ELF:
+	case IdentifiedFileType::UNKNOWN_ISO:
 	case IdentifiedFileType::ARCHIVE_RAR:
 	case IdentifiedFileType::ARCHIVE_ZIP:
 	case IdentifiedFileType::ARCHIVE_7Z:
@@ -333,7 +334,7 @@ public:
 		: gamePath_(gamePath), info_(info) {
 	}
 
-	~GameInfoWorkItem() override {
+	~GameInfoWorkItem() {
 		info_->pending.store(false);
 		info_->working.store(false);
 		info_->DisposeFileLoader();
@@ -677,9 +678,13 @@ void GameInfoCache::Clear() {
 
 void GameInfoCache::CancelAll() {
 	for (auto info : info_) {
-		auto fl = info.second->GetFileLoader();
-		if (fl) {
-			fl->Cancel();
+		// GetFileLoader will create one if there isn't one already.
+		// Avoid that by checking.
+		if (info.second->HasFileLoader()) {
+			auto fl = info.second->GetFileLoader();
+			if (fl) {
+				fl->Cancel();
+			}
 		}
 	}
 }

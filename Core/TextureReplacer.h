@@ -17,13 +17,17 @@
 
 #pragma once
 
+#include "ppsspp_config.h"
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
+#include "Common/CommonFuncs.h"
 #include "Common/CommonTypes.h"
 #include "Common/MemoryUtil.h"
 #include "Common/File/Path.h"
+#include "Common/GPU/DataFormat.h"
 
 #include "GPU/Common/TextureDecoder.h"
 #include "GPU/ge_constants.h"
@@ -33,17 +37,7 @@ class TextureCacheCommon;
 class TextureReplacer;
 class ReplacedTextureTask;
 class LimitedWaitable;
-
-enum class ReplacedTextureFormat {
-	F_5650,
-	F_5551,
-	F_4444,
-	F_8888,
-	F_0565_ABGR,
-	F_1555_ABGR,
-	F_4444_ABGR,
-	F_8888_BGRA,
-};
+struct zip;
 
 // These must match the constants in TextureCacheCommon.
 enum class ReplacedTextureAlpha {
@@ -61,16 +55,47 @@ enum class ReplacedTextureHash {
 struct ReplacedTextureLevel {
 	int w;
 	int h;
-	ReplacedTextureFormat fmt;
+	Draw::DataFormat fmt;  // NOTE: Right now, the only supported format is Draw::DataFormat::R8G8B8A8_UNORM.
 	Path file;
+	// Can be ignored for hashing/equal, since file has all uniqueness.
+	// To be able to reload, we need to be able to reopen, unfortunate we can't use zip_file_t.
+	zip *z = nullptr;
+	int64_t zi = -1;
+
+	bool operator ==(const ReplacedTextureLevel &other) const {
+		if (w != other.w || h != other.h || fmt != other.fmt)
+			return false;
+		return file == other.file;
+	}
+};
+
+namespace std {
+	template <>
+	struct hash<ReplacedTextureLevel> {
+		std::size_t operator()(const ReplacedTextureLevel &k) const {
+#if PPSSPP_ARCH(64BIT)
+			uint64_t v = (uint64_t)k.w | ((uint64_t)k.h << 32);
+			v = __rotl64(v ^ (uint64_t)k.fmt, 13);
+#else
+			uint32_t v = k.w ^ (uint32_t)k.fmt;
+			v = __rotl(__rotl(v, 13) ^ k.h, 13);
+#endif
+			return v ^ hash<string>()(k.file.ToString());
+		}
+	};
+}
+
+struct ReplacedLevelCache {
+	std::mutex lock;
+	std::vector<uint8_t> data;
+	double lastUsed = 0.0;
 };
 
 struct ReplacementCacheKey {
 	u64 cachekey;
 	u32 hash;
 
-	ReplacementCacheKey(u64 c, u32 h) : cachekey(c), hash(h) {
-	}
+	ReplacementCacheKey(u64 c, u32 h) : cachekey(c), hash(h) { }
 
 	bool operator ==(const ReplacementCacheKey &k) const {
 		return k.cachekey == cachekey && k.hash == hash;
@@ -94,8 +119,7 @@ struct ReplacementAliasKey {
 		};
 	};
 
-	ReplacementAliasKey(u64 c, u32 h, u32 l) : cachekey(c), level(l), hash(h) {
-	}
+	ReplacementAliasKey(u64 c, u32 h, u32 l) : cachekey(c), level(l), hash(h) { }
 
 	bool operator ==(const ReplacementAliasKey &k) const {
 		return k.cachekey == cachekey && k.hashAndLevel == hashAndLevel;
@@ -128,11 +152,21 @@ namespace std {
 struct ReplacedTexture {
 	~ReplacedTexture();
 
-	inline bool Valid() {
+	inline bool Valid() const {
+		if (!initDone_)
+			return false;
 		return !levels_.empty();
 	}
 
-	bool GetSize(int level, int &w, int &h) {
+	inline bool IsInvalid() const {
+		if (!initDone_)
+			return false;
+		return levels_.empty();
+	}
+
+	bool GetSize(int level, int &w, int &h) const {
+		if (!initDone_)
+			return false;
 		if ((size_t)level < levels_.size()) {
 			w = levels_[level].w;
 			h = levels_[level].h;
@@ -141,18 +175,22 @@ struct ReplacedTexture {
 		return false;
 	}
 
-	int MaxLevel() {
-		return (int)levels_.size() - 1;
+	int NumLevels() const {
+		if (!initDone_)
+			return 0;
+		return (int)levels_.size();
 	}
 
-	ReplacedTextureFormat Format(int level) {
-		if ((size_t)level < levels_.size()) {
-			return levels_[level].fmt;
+	Draw::DataFormat Format(int level) const {
+		if (initDone_) {
+			if ((size_t)level < levels_.size()) {
+				return levels_[level].fmt;
+			}
 		}
-		return ReplacedTextureFormat::F_8888;
+		return Draw::DataFormat::R8G8B8A8_UNORM;
 	}
 
-	u8 AlphaStatus() {
+	u8 AlphaStatus() const {
 		return (u8)alphaStatus_;
 	}
 
@@ -166,11 +204,14 @@ protected:
 	void PurgeIfOlder(double t);
 
 	std::vector<ReplacedTextureLevel> levels_;
-	std::vector<std::vector<uint8_t>> levelData_;
-	ReplacedTextureAlpha alphaStatus_;
+	std::vector<ReplacedLevelCache *> levelData_;
+	ReplacedTextureAlpha alphaStatus_ = ReplacedTextureAlpha::UNKNOWN;
 	double lastUsed_ = 0.0;
 	LimitedWaitable *threadWaitable_ = nullptr;
+	std::mutex mutex_;
 	bool cancelPrepare_ = false;
+	bool initDone_ = false;
+	bool prepareDone_ = false;
 
 	friend TextureReplacer;
 	friend ReplacedTextureTask;
@@ -183,7 +224,13 @@ struct ReplacedTextureDecodeInfo {
 	bool isVideo;
 	bool isFinal;
 	int scaleFactor;
-	ReplacedTextureFormat fmt;
+	Draw::DataFormat fmt;
+};
+
+enum class ReplacerDecimateMode {
+	NEW_FRAME,
+	FORCE_PRESSURE,
+	ALL,
 };
 
 class TextureReplacer {
@@ -200,17 +247,22 @@ public:
 
 	u32 ComputeHash(u32 addr, int bufw, int w, int h, GETextureFormat fmt, u16 maxSeenV);
 
-	ReplacedTexture &FindReplacement(u64 cachekey, u32 hash, int w, int h);
+	ReplacedTexture &FindReplacement(u64 cachekey, u32 hash, int w, int h, double budget);
 	bool FindFiltering(u64 cachekey, u32 hash, TextureFiltering *forceFiltering);
 	ReplacedTexture &FindNone() {
 		return none_;
 	}
 
+	// Check if a NotifyTextureDecoded for this texture is desired (used to avoid reads from write-combined memory.)
+	bool WillSave(const ReplacedTextureDecodeInfo &replacedInfo);
+
+	// Notify that a new texture was decoded.  May already be upscaled, saves the data passed.
 	void NotifyTextureDecoded(const ReplacedTextureDecodeInfo &replacedInfo, const void *data, int pitch, int level, int w, int h);
 
-	void Decimate(bool forcePressure);
+	void Decimate(ReplacerDecimateMode mode);
 
 	static bool GenerateIni(const std::string &gameID, Path &generatedFilename);
+	static bool IniExists(const std::string &gameID);
 
 protected:
 	bool LoadIni();
@@ -223,19 +275,22 @@ protected:
 	std::string LookupHashFile(u64 cachekey, u32 hash, int level);
 	std::string HashName(u64 cachekey, u32 hash, int level);
 	void PopulateReplacement(ReplacedTexture *result, u64 cachekey, u32 hash, int w, int h);
-	bool PopulateLevel(ReplacedTextureLevel &level);
+	bool PopulateLevelFromPath(ReplacedTextureLevel &level, bool ignoreError);
+	bool PopulateLevelFromZip(ReplacedTextureLevel &level, bool ignoreError);
 
-	SimpleBuf<u32> saveBuf;
 	bool enabled_ = false;
 	bool allowVideo_ = false;
 	bool ignoreAddress_ = false;
 	bool reduceHash_ = false;
 	float reduceHashSize = 1.0; // default value with reduceHash to false
 	float reduceHashGlobalValue = 0.5; // Global value for textures dump pngs of all sizes, 0.5 by default but can be set in textures.ini
+	double lastTextureCacheSizeGB_ = 0.0;
 	bool ignoreMipmap_ = false;
 	std::string gameID_;
 	Path basePath_;
 	ReplacedTextureHash hash_ = ReplacedTextureHash::QUICK;
+	zip *zip_ = nullptr;
+
 	typedef std::pair<int, int> WidthHeightPair;
 	std::unordered_map<u64, WidthHeightPair> hashranges_;
 	std::unordered_map<u64, float> reducehashranges_;
@@ -244,5 +299,6 @@ protected:
 
 	ReplacedTexture none_;
 	std::unordered_map<ReplacementCacheKey, ReplacedTexture> cache_;
-	std::unordered_map<ReplacementCacheKey, ReplacedTextureLevel> savedCache_;
+	std::unordered_map<ReplacementCacheKey, std::pair<ReplacedTextureLevel, double>> savedCache_;
+	std::unordered_map<ReplacedTextureLevel, ReplacedLevelCache> levelCache_;
 };

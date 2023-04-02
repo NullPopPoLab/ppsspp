@@ -259,7 +259,7 @@ void MemStickScreen::CreateViews() {
 		privateString = StringFromFormat("%s (%s)", iz->T("Skip for now"), privateString.c_str());
 	}
 
-	leftColumn->Add(new RadioButton(&choice_, CHOICE_PRIVATE_DIRECTORY, privateString.c_str()))->OnClick.Handle(this, &MemStickScreen::OnChoiceClick);
+	leftColumn->Add(new RadioButton(&choice_, CHOICE_PRIVATE_DIRECTORY, privateString))->OnClick.Handle(this, &MemStickScreen::OnChoiceClick);
 	if (choice_ == CHOICE_PRIVATE_DIRECTORY) {
 		AddExplanation(leftColumn, (MemStickScreen::Choice)choice_);
 	}
@@ -352,7 +352,7 @@ UI::EventReturn MemStickScreen::SetFolderManually(UI::EventParams &params) {
 
 			if (newPath.empty()) {
 				// Reuse below message instead of adding yet another string.
-				SystemToast(sy->T("Path does not exist!"));
+				System_Toast(sy->T("Path does not exist!"));
 				return;
 			}
 
@@ -386,7 +386,7 @@ UI::EventReturn MemStickScreen::SetFolderManually(UI::EventParams &params) {
 			}
 
 			if (!File::Exists(pendingMemStickFolder)) {
-				SystemToast(sy->T("Path does not exist!"));
+				System_Toast(sy->T("Path does not exist!"));
 				return;
 			}
 
@@ -409,6 +409,8 @@ UI::EventReturn MemStickScreen::UseInternalStorage(UI::EventParams &params) {
 			// This can't really happen?? Not worth making an error message.
 			ERROR_LOG_REPORT(SYSTEM, "Could not switch memstick path in setup (internal)");
 		}
+		// Don't have a confirmation dialog that would otherwise do it for us, need to just switch directly to the main screen.
+		screenManager()->switchScreen(new MainScreen());
 	} else if (pendingMemStickFolder != g_Config.memStickDirectory) {
 		// Always ask for confirmation when called from the UI. Likely there's already some data.
 		screenManager()->push(new ConfirmMemstickMoveScreen(pendingMemStickFolder, false));
