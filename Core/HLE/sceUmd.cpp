@@ -482,11 +482,11 @@ static u32 sceUmdGetErrorStat()
 	return umdErrorStat;
 }
 
-void __UmdReplace(Path filepath) {
+bool __UmdReplace(Path filepath) {
 	std::string error = "";
 	if (!UmdReplace(filepath, error)) {
 		ERROR_LOG(SCEIO, "UMD Replace failed: %s", error.c_str());
-		return;
+		return false;
 	}
 
 	UMDInserted = false;
@@ -498,6 +498,7 @@ void __UmdReplace(Path filepath) {
 	u32 notifyArg = PSP_UMD_PRESENT | PSP_UMD_READABLE | PSP_UMD_CHANGED;
 	if (driveCBId != 0)
 		__KernelNotifyCallback(driveCBId, notifyArg);
+	return true;
 }
 
 bool getUMDReplacePermit() {
